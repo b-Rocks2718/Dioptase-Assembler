@@ -94,7 +94,7 @@ The first operand, which specifies where the pc will be stored, can be optionall
 
 `pop rA` - Alias for `lw rA, [sp], 4` (load, then increment sp)
 
-`mov rA, rB` - Alias for `add rA, rB, r0` as long as `rA` and `rB` are not control registers.  
+`mov rA, rB` - Alias for `add rA, rB, r0` when`rA` and `rB` are not control registers. If at least one is a control register, then this is an alias for a `crmv` instruction.  
 
 `movi rA, imm` - Alias for
 ```

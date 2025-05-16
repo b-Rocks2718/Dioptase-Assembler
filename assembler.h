@@ -1,6 +1,6 @@
 #pragma once
 
-struct InstructionArray* assemble(char* prog);
+struct InstructionArray* assemble(char const* prog);
 
 enum ConsumeResult {
   ERROR,

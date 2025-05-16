@@ -8,6 +8,7 @@
 #include "slice.h"
 #include "assembler.h"
 #include "hashmap.h"
+#include "instruction_array.h"
 
 /*
   Two-pass assembler.
@@ -131,9 +132,13 @@ static struct Slice* consume_identifier(void) {
 // label is an identifier followed by a colon
 static struct Slice* consume_label(void){
   skip();
+  char const * old_current = current;
   struct Slice* label = consume_identifier();
   if (consume(":")) return label;
-  else return NULL;
+
+  // undo side effects
+  current = old_current;
+  return NULL;
 }
 
 // attempt to consume a register
@@ -146,7 +151,7 @@ static int consume_register(void) {
     i += 1;
     while(isdigit(current[i])) {
       // then followed by numbers
-      v = 10 * v + current[i];
+      v = 10 * v + current[i] - '0';
       i += 1;
     }
 
@@ -171,7 +176,7 @@ static int consume_control_register(void) {
     i += 2;
     while(isdigit(current[i])) {
       // then followed by numbers
-      v = 10 * v + current[i];
+      v = 10 * v + current[i] - '0';
       i += 1;
     }
 
@@ -194,6 +199,7 @@ static int consume_control_register(void) {
 static long consume_literal(enum ConsumeResult* result) {
   skip();
   bool negate = false;
+  char const * old_current = current;
   if (*current == '-') {
     negate = true;
     current++;
@@ -249,13 +255,14 @@ static long consume_literal(enum ConsumeResult* result) {
     return v;
   } else if (*current == '0' && (*(current + 1) == 'x' || *(current + 1) == 'X')) {
     long v = 0;
+    current += 2;
     while (isalnum(*current)) {
       int d;
       if (isdigit(*current)){
         d = *current - '0';
-      } else if (isupper(*current)){
+      } else if (isupper(*current) && *current <= 'F'){
         d = *current - 'A' + 10;
-      } else if (islower(*current)){
+      } else if (islower(*current) && *current <= 'f'){
         d = *current - 'a' + 10;
       } else {
         print_error();
@@ -272,6 +279,7 @@ static long consume_literal(enum ConsumeResult* result) {
     if (negate) v *= -1; 
     return v;
   } else {
+    current = old_current;
     *result = NOT_FOUND;
     return 0;
   }
@@ -312,6 +320,7 @@ static int encode_bitwise_immediate(long imm, bool* success){
     print_error();
     printf("Bitwise instruction immediate must be an 8 bit value, ");
     printf("shifted by 0, 8, 16, or 24 bits\n");
+    printf("Got %ld\n", imm);
     return 0;
   }
 }
@@ -323,6 +332,7 @@ static int encode_shift_immediate(long imm, bool* success){
     *success = false;
     print_error();
     printf("Shift instruction immediate must be in range 0 to 31\n");
+    printf("Got %ld\n", imm);
     return 0;
   }
 }
@@ -332,7 +342,8 @@ static int encode_arithmetic_immediate(long imm, bool* success){
     return imm & 0xFFF;
   } else {
     print_error();
-    printf("Shift instruction immediate must be in range -2048 to 2047\n");
+    printf("Arithmetic instruction immediate must be in range -2048 to 2047\n");
+    printf("Got %ld\n", imm);
     *success = false;
     return 0;
   }
@@ -375,6 +386,7 @@ static int consume_alu_op(int alu_op, bool* success){
     instruction |= 1 << 27; // opcode is 1
     instruction |= ra << 22;
     instruction |= rb << 17;
+    instruction |= alu_op << 12;
     
     int encoding;
     if (0 <= alu_op && alu_op < 7){
@@ -397,7 +409,9 @@ static int consume_alu_op(int alu_op, bool* success){
     instruction |= ra << 22;
     instruction |= rb << 17;
     instruction |= rc;
+    instruction |= alu_op << 5;
   }
+  
   return instruction; 
 }
 
@@ -408,6 +422,7 @@ static int encode_lui_immediate(long imm, bool* success){
     *success = false;
     print_error();
     printf("lui immediate must be a 32 bit integer with zero for bottom 10 bits\n");
+    printf("Got %ld\n", imm);
     return 0;
   }
 }
@@ -454,6 +469,7 @@ static int encode_memory_immediate(long imm, bool* success){
     print_error();
     printf("Invalid immediate for memory instruction\n");
     printf("Immediate must be a 12 bit number shifted by 0, 1, 2, or 3\n");
+    printf("Got %ld\n", imm);
     *success = false;
     return 0;
   }
@@ -568,29 +584,209 @@ static int consume_mem(bool is_absolute, bool is_load, bool* success){
   return instruction;
 }
 
-static int consume_branch(int branch_code, bool is_absolute, bool* success){
+static int encode_branch_immediate(long imm, bool* success){
+  if (-(1 << 23) <= imm && imm < (1 << 23) && ((imm & 0x3) == 0)){
+    return imm;
+  } else {
+    *success = false;
+    print_error();
+    printf("branch immediate must be in range -8388608 to 8388607, and be divisible by 4\n");
+    printf("Got %ld\n", imm);
+    return 0;
+  }
+}
 
-  return 0;
+static int consume_branch(int branch_code, bool is_absolute, bool* success){
+  int instruction = 0;
+
+  assert(0 <= branch_code && branch_code < 19); // ensure branch code is valid
+
+  int ra = consume_register();
+  if (ra == -1){
+    // it's an immediate branch
+    enum ConsumeResult result;
+    int imm = consume_immediate(&result);
+    if (result != FOUND){
+      print_error();
+      printf("Branch instruction expects register or immediate operand\n");
+      *success = false;
+      return 0;
+    }
+    if (is_absolute){
+      print_error();
+      printf("Immediate branch is not allowed for absolute branches\n");
+      *success = false;
+      return 0;
+    }
+    int encoding = encode_branch_immediate(imm, success);
+    instruction |= 5 << 27; // opcode
+    instruction |= branch_code <<22;
+    instruction |= encoding;
+  } else {
+    // register branch
+    int rb = consume_register();
+    if (rb == -1){
+      // ra was omitted
+      rb = ra;
+      ra = 0;
+    }
+    if (is_absolute) instruction |= 6 << 27;
+    else instruction |= 7 << 27;
+    instruction |= branch_code << 22;
+    instruction |= ra << 5;
+    instruction |= rb;
+  }
+
+  return instruction;
 }
 
 static int consume_syscall(bool* success){
+  if (consume("EXIT")){
+    int instruction = (8 << 27);
 
-  return 0;
+    return instruction;
+  } else {
+    // unrecognized call
+    print_error();
+    printf("Unrecognized syscall\n");
+    printf("Supported syscalls are: EXIT\n");
+    *success = false;
+    return 0;
+  }
+}
+
+static void check_privileges(bool* success){
+  if (!is_kernel){
+    *success = false;
+    print_error();
+    printf("Used privileged instruction\n");
+    printf("Put .kernel somewhere in the file if this was intentional\n");
+  }
 }
 
 static int consume_tlb_op(int tlb_op, bool* success){
+  check_privileges(success);
+  assert(0 <= tlb_op && tlb_op < 4); // ensure tlb op is valid
 
-  return 0;
+  int instruction = 31 << 27; // opcode
+
+  if (tlb_op == 3){
+    instruction |= 1 << 11;
+  } else {
+    int ra = consume_register();
+    if (ra == -1){
+      print_error();
+      printf("Invalid register\n");
+      printf("Valid registers are r0 - r31\n");
+      *success = false;
+      return 0;
+    }
+    int rb = consume_register();
+    if (rb == -1){
+      print_error();
+      printf("Invalid register\n");
+      printf("Valid registers are r0 - r31\n");
+      *success = false;
+      return 0;
+    }
+
+    instruction |= ra << 22;
+    instruction |= rb << 17;
+
+    if (tlb_op == 1){
+      instruction |= 1 << 10;
+    }
+  }
+
+  return instruction;
+}
+
+static int consume_crmv(bool* success){
+  check_privileges(success);
+  int instruction = 31 << 27;
+  instruction |= 1 << 12;
+
+  int ra = consume_register();
+  int rb;
+  if (ra == -1){
+    ra = consume_control_register();
+    if (ra == -1){
+      print_error();
+      printf("Invalid register or control register\n");
+      *success = false;
+      return 0; 
+    }
+    rb = consume_control_register();
+    if (rb == -1) {
+      rb = consume_register();
+      if (rb == -1){
+        print_error();
+        printf("Invalid control register\n");
+        *success = false;
+        return 0; 
+      }
+      // crmv crA, rB
+    } else {
+      // crmv crA, crB
+      instruction |= 1 << 10;
+    }
+  } else {
+    rb = consume_control_register();
+    if (rb == -1){
+      print_error();
+      printf("Invalid control register\n");
+      *success = false;
+      return 0; 
+    }
+    // crmv rA, crB
+    instruction |= 2 << 10;
+  }
+  instruction |= ra << 22;
+  instruction |= rb << 17;
+
+  return instruction;
 }
 
 static int consume_mode_op(bool* success){
+  check_privileges(success);
 
-  return 0;
+  int instruction = 31 << 27; // opcode
+  instruction |= 2 << 12;
+
+  if (consume("run"));
+  else if (consume("sleep")){
+    instruction |= 1 << 8;
+  } else if (consume("halt")){
+    instruction |= 2 << 8;
+  } else {
+    print_error();
+    printf("Invalid mode\n");
+    printf("Valid modes are: run, sleep, or halt\n");
+    *success = false;
+    return 0;
+  }
+
+  return instruction;
 }
 
 static int consume_rfe(bool* success){
+  check_privileges(success);
 
-  return 0;
+  int instruction = 31 << 27;
+  instruction |= 3 << 12;
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    printf("Invalid register\n");
+    printf("Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  instruction |= ra << 22;
+
+  return instruction;
 }
 
 // consumes a single instruction and converts it to binary or hex
@@ -664,6 +860,7 @@ static int consume_instruction(bool* success){
   if (consume_keyword("tlbr")) return consume_tlb_op(0, success);
   if (consume_keyword("tlbw")) return consume_tlb_op(1, success);
   if (consume_keyword("tlbc")) return consume_tlb_op(2, success);
+  if (consume_keyword("crmv")) return consume_crmv(success);
   if (consume_keyword("mode")) return consume_mode_op(success);
   if (consume_keyword("rfe")) return consume_rfe(success);
   
@@ -672,15 +869,17 @@ static int consume_instruction(bool* success){
 }
 
 // assemble an entire program
-struct InstructionArray* assemble(char* prog){
+struct InstructionArray* assemble(char const* prog){
   program = prog;
   current = prog;
+
+  valid_labels = create_hash_map(10000);
 
   bool success = true;
 
   struct InstructionArray* instructions = create_instruction_array(1000);
 
-  while (true){
+  while (success){
     // consume any labels, they were already dealt with
     while (skip_newline(), consume_label());
 
@@ -756,16 +955,15 @@ struct InstructionArray* assemble(char* prog){
       }
       pc += imm;
     } else {
-      instruction_array_append(instructions, consume_instruction(&success));
+      int instruction = consume_instruction(&success);
+      if (success) instruction_array_append(instructions, instruction);
       pc++;
-    }
-
-    if (!success){
-      goto error;
     }
   }
 
   if (!is_at_end()) {
+    print_error();
+    printf("Unrecognized instruction\n");
     goto error;
   }
 
