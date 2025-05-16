@@ -9,10 +9,12 @@ CFLAGS    := -Wall -g
 # Sources and objects
 SRCS      := $(wildcard *.c)
 OBJFILES  := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRCS))
-EXEC      := $(BIN_DIR)/main
+EXEC      := $(BIN_DIR)/assembler
 
 # Link
-$(EXEC): dirs $(OBJFILES)
+all: $(EXEC)
+
+$(EXEC): $(OBJFILES) | dirs
 	$(CC) $(CFLAGS) -o $@ $(OBJFILES)
 
 # Compile
@@ -20,11 +22,15 @@ $(BUILD_DIR)/%.o: %.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Ensure build directory exists
-.PHONY: dirs
 dirs:
-	mkdir -p $(BUILD_DIR) $(BIN_DIR)
+	@mkdir -p $(BUILD_DIR) $(BIN_DIR)
 
-# Clean
+# Remove everything but the executable
 .PHONY: clean
 clean:
+	rm -rf $(BUILD_DIR)
+
+# Remove everything
+.PHONY: purge
+purge:
 	rm -rf $(BUILD_DIR) $(BIN_DIR)

@@ -5,7 +5,7 @@
 
 struct Slice {
   char const * start; // where does the string start in memory?
-  size_t len;        // How many characters in the string
+  size_t len;        // How many characters in the string?
 };
 
 bool compare_slice_to_pointer(const struct Slice* s, char const *p);

@@ -4,9 +4,15 @@
 
 Put each instruction on a new line  
 
-Labels are defined by any string of non-whitespace characters and are terminated with a colon.  
+Labels are defined by any string that begins with a letter or underscore and is followed by any sequence of letters, numbers, underscores, or periods.
+To define a label, append a colon to the end.
 
-Ex: `label.example:`
+Example label definition: `label.example:`  
+Example label use: `bnz label.example`  
+
+Labels are local by default. To make labels global, use `.global`  
+
+Example: `.global label.example`
 
 Comments begin with a `#` and continue until the end of the line
 
@@ -21,13 +27,13 @@ Valid registers: `r0` - `r31`
 Valid control registers:
 
 `cr0` - `cr6`  
-`PSR` (processor status register) is an alias for `cr0`  
-`PID` (process ID) is an alias for `cr1`  
-`ISR` (interrupt status register) is an alias for `cr2`  
-`IMR` (interrupt mask register) is an alias for `cr3`  
-`EPC` (exceptional PC) is an alias for `cr4`  
-`EFG` (exceptional flags) is an alias for `cr5`  
-`CDV` (clock divider) is an alias for `cr6`  
+`psr` (processor status register) is an alias for `cr0`  
+`pid` (process ID) is an alias for `cr1`  
+`isr` (interrupt status register) is an alias for `cr2`  
+`imr` (interrupt mask register) is an alias for `cr3`  
+`epc` (exceptional PC) is an alias for `cr4`  
+`efg` (exceptional flags) is an alias for `cr5`  
+`cdv` (clock divider) is an alias for `cr6`  
 
 ### RRR Instructions
 
@@ -39,7 +45,7 @@ Syntax is `op rA, rB, rC` where op is a valid RRR instruction or macro. `rA` wil
 
 Instructions that take a register and an immediate operand, and target a register.
 
-Syntax is `op rA, rB, imm`, with `rA` the target and `rB` and `imm` the operands. `imm` can be in base 2 (prefix with 0b), 10, or 16 (prefix with 0x), and can be prefixed with a minus to indicate it should be negated. `imm` could also be a label, assuming that the label is defined somewhere in the file. The label will be converted to a pc-relative offset and an error will be raised if this value does not fit in the instruction encoding.
+Syntax is `op rA, rB, imm`, with `rA` the target and `rB` and `imm` the operands. `imm` can be in base 2 (prefix with 0b), 8 (prefix with 0o), 10, or 16 (prefix with 0x), and can be prefixed with a minus to indicate it should be negated. The case of the b, o, or x does not matter. Base 10 immediates cannot begin with a 0. `imm` could also be a label, assuming that the label is defined somewhere in the file. The label will be converted to a pc-relative offset and an error will be raised if this value does not fit in the instruction encoding.
 
 Examples:  `addi r1, r0, 10`, `addi r1, r0, 0xA`, and `addi r1, r0, 0b1010` are all equivalent. Something like `addi r1, r0, -1` is also allowed, and so is `swr r1, [r2, data_0]`
 
@@ -47,7 +53,7 @@ Note that the immediates that are possible to be encoded varies per instruction.
 
 #### Memory Instructions
 
-Memory instructions are special because they are RRR instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets.
+Memory instructions are special because they are RRR instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets. For `sw` and `lw`, labels cannot be used as the immediate (use pc-relative addressing to access labels).  
 
 Examples:  
 `lw r1, [r2]` no offset  
@@ -59,7 +65,7 @@ The syntax for `sw` is analagous.
 
 For `swr` and `lwr`, the only offset type allowed is signed immediate. The register address can be optionally ommitted, and `r0` will be used.
 
-Example: `swr r1, [r0, label]` and `swr r1, label` are equivalent.
+Example: `swr r1, [r0, label]` and `swr r1, [label]` are equivalent.
 
 ### RI Instructions
 
@@ -69,11 +75,12 @@ Just lui for now
 
 ### I Instructions
 
-PC-relative branches, such as `bnz loop` where `loop` is a label defined somewhere
+PC-relative branches, such as `bnz loop` where `loop` is a label defined somewhere.
 
 ### RR Instructions
 
 Branch and link, such as `bl r1, r2`
+The first operand, which specifies where the pc will be stored, can be optionally omitted. If it is, `r0` will be used.  
 
 ### Syscalls
 
@@ -81,10 +88,13 @@ Branch and link, such as `bl r1, r2`
 
 ## Macros
 
+`nop` - Alias for `and r0, r0, r0` (which is the same as `.fill 0`). Has no effect when executed.  
+
 `push rA` - Alias for `sw rA [sp, -4]!` (decrement sp, then store)
 
 `pop rA` - Alias for `lw rA, [sp], 4` (load, then increment sp)
 
+`mov rA, rB` - Alias for `add rA, rB, r0` as long as `rA` and `rB` are not control registers.  
 
 `movi rA, imm` - Alias for
 ```
@@ -92,15 +102,33 @@ lui rA, (imm & 0xFFFFFC00)
 addi rA, rA, (imm & 0x3FF)
 ```
 
+Can put any 32 bit value in a register
+
 `call imm` - Alias for
 ```
-movi r31, imm
+movi r31, <imm - 8>
 brl  r31, r31
 ```
-
+Do a -8 because we want the offset from the brl instruction, not the movi
 
 `ret` - Alias for  `brl r0, r31`
+
+## Directives
+
+`.global label` - makes label global
+
+`.kernel` - allows the use of privileged instructions
+
+`.origin a` - places the code following the directive at address `a`. Will error if you give it a value less than the current pc (can use it to forward, not backward)
 
 `.fill imm` - zero extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`
 
 `.space n` - expands to `.fill 0`, repeated `n` times
+
+## Privileged instructions
+
+By default, the assembler assumes you are writing user code and rejects privileged instructions.   
+To use privileged instructions, put `.kernel` somewhere in the file (preferably at the top).
+
+Privileged instructions sometimes take a control register as an operand 
+instead of a normal register. See the ISA doc for which ones do this.
