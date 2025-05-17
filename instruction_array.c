@@ -3,6 +3,10 @@
 
 #include "instruction_array.h"
 
+/*
+  Dynamic array used for holding instructions
+*/
+
 struct InstructionArray* create_instruction_array(size_t capacity){
   int* instructions = malloc(sizeof(int) * capacity);
 

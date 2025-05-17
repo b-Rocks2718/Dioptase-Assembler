@@ -30,12 +30,28 @@ static bool is_kernel = false;
 
 // print line causing an error
 static void print_error() {
-  printf("Error in line %u: \"", line_count);
-  char const * end = current;
-  while (*end != '\0' && *end != '\n') end++;
-  struct Slice unrecognized = {current, end - current};
-  print_slice(&unrecognized);
-  printf("\"\n");
+  // avoid printing this twice
+  static bool has_printed = false;
+
+  if (!has_printed){
+    printf("Error in line %u: \"", line_count);
+    
+    // get start and end of line
+    char const * start = current;
+    while (*(start - 1) != '\0' && *(start - 1) != '\n') start--;
+    char const * end = current;
+    while (*(end + 1) != '\0' && *end != '\n') end++;
+    
+    // remove whitespace at beginning and end
+    while (isspace(*start)) start++;
+    while (isspace(*(end - 1))) end--;
+
+    // print the line
+    struct Slice unrecognized = {start, end - start};
+    print_slice(&unrecognized);
+    printf("\"\n");
+    has_printed = true;
+  }
 }
 
 // is the rest of the file just whitespace?
@@ -137,6 +153,7 @@ static struct Slice* consume_label(void){
   if (consume(":")) return label;
 
   // undo side effects
+  free(label);
   current = old_current;
   return NULL;
 }
@@ -378,7 +395,6 @@ static int consume_alu_op(int alu_op, bool* success){
     if (result != FOUND){
       print_error();
       printf("Invalid register or immediate\n");
-      printf("Valid registers are r0 - r31\n");
       *success = false;
       return 0;
     }
@@ -790,82 +806,86 @@ static int consume_rfe(bool* success){
 }
 
 // consumes a single instruction and converts it to binary or hex
-static int consume_instruction(bool* success){
+static int consume_instruction(enum ConsumeResult* result){
+  int instruction;
+  bool success = true;
+
   // user instructions
-  if (consume_keyword("and")) return consume_alu_op(0, success);
-  if (consume_keyword("nand")) return consume_alu_op(1, success);
-  if (consume_keyword("or")) return consume_alu_op(2, success);
-  if (consume_keyword("nor")) return consume_alu_op(3, success);
-  if (consume_keyword("xor")) return consume_alu_op(4, success);
-  if (consume_keyword("xnor")) return consume_alu_op(5, success);
-  if (consume_keyword("not")) return consume_alu_op(6, success);
-  if (consume_keyword("lsl")) return consume_alu_op(7, success);
-  if (consume_keyword("lsr")) return consume_alu_op(8, success);
-  if (consume_keyword("asr")) return consume_alu_op(9, success);
-  if (consume_keyword("rotl")) return consume_alu_op(10, success);
-  if (consume_keyword("rotr")) return consume_alu_op(11, success);
-  if (consume_keyword("lslc")) return consume_alu_op(12, success);
-  if (consume_keyword("lsrc")) return consume_alu_op(13, success);
-  if (consume_keyword("add")) return consume_alu_op(14, success);
-  if (consume_keyword("addc")) return consume_alu_op(15, success);
-  if (consume_keyword("sub")) return consume_alu_op(16, success);
-  if (consume_keyword("subb")) return consume_alu_op(17, success);
-  if (consume_keyword("mul")) return consume_alu_op(18, success);
-  if (consume_keyword("lui")) return consume_lui(success);
-  if (consume_keyword("sw")) return consume_mem(true, false, success);
-  if (consume_keyword("lw")) return consume_mem(true, true, success);
-  if (consume_keyword("swr")) return consume_mem(false, false, success);
-  if (consume_keyword("lwr")) return consume_mem(false, true, success);
-  if (consume_keyword("br")) return consume_branch(0, false, success);
-  if (consume_keyword("bz")) return consume_branch(1, false, success);
-  if (consume_keyword("bnz")) return consume_branch(2, false, success);
-  if (consume_keyword("bs")) return consume_branch(3, false, success);
-  if (consume_keyword("bns")) return consume_branch(4, false, success);
-  if (consume_keyword("bc")) return consume_branch(5, false, success);
-  if (consume_keyword("bnc")) return consume_branch(6, false, success);
-  if (consume_keyword("bo")) return consume_branch(7, false, success);
-  if (consume_keyword("bno")) return consume_branch(8, false, success);
-  if (consume_keyword("bp")) return consume_branch(9, false, success);
-  if (consume_keyword("bnp")) return consume_branch(10, false, success);
-  if (consume_keyword("bg")) return consume_branch(11, false, success);
-  if (consume_keyword("bge")) return consume_branch(12, false, success);
-  if (consume_keyword("bl")) return consume_branch(13, false, success);
-  if (consume_keyword("ble")) return consume_branch(14, false, success);
-  if (consume_keyword("ba")) return consume_branch(15, false, success);
-  if (consume_keyword("bae")) return consume_branch(16, false, success);
-  if (consume_keyword("bb")) return consume_branch(17, false, success);
-  if (consume_keyword("bbe")) return consume_branch(18, false, success);
-  if (consume_keyword("bra")) return consume_branch(0, true, success);
-  if (consume_keyword("bza")) return consume_branch(1, true, success);
-  if (consume_keyword("bnza")) return consume_branch(2, true, success);
-  if (consume_keyword("bsa")) return consume_branch(3, true, success);
-  if (consume_keyword("bnsa")) return consume_branch(4, true, success);
-  if (consume_keyword("bca")) return consume_branch(5, true, success);
-  if (consume_keyword("bnca")) return consume_branch(6, true, success);
-  if (consume_keyword("boa")) return consume_branch(7, true, success);
-  if (consume_keyword("bnoa")) return consume_branch(8, true, success);
-  if (consume_keyword("bpa")) return consume_branch(9, true, success);
-  if (consume_keyword("bnpa")) return consume_branch(10, true, success);
-  if (consume_keyword("bga")) return consume_branch(11, true, success);
-  if (consume_keyword("bgea")) return consume_branch(12, true, success);
-  if (consume_keyword("bla")) return consume_branch(13, true, success);
-  if (consume_keyword("blea")) return consume_branch(14, true, success);
-  if (consume_keyword("baa")) return consume_branch(15, true, success);
-  if (consume_keyword("baea")) return consume_branch(16, true, success);
-  if (consume_keyword("bba")) return consume_branch(17, true, success);
-  if (consume_keyword("bbea")) return consume_branch(18, true, success);
-  if (consume_keyword("sys")) return consume_syscall(success);
+  if (consume_keyword("and")) instruction = consume_alu_op(0, &success);
+  else if (consume_keyword("nand")) instruction = consume_alu_op(1, &success);
+  else if (consume_keyword("or")) instruction = consume_alu_op(2, &success);
+  else if (consume_keyword("nor")) instruction = consume_alu_op(3, &success);
+  else if (consume_keyword("xor")) instruction = consume_alu_op(4, &success);
+  else if (consume_keyword("xnor")) instruction = consume_alu_op(5, &success);
+  else if (consume_keyword("not")) instruction = consume_alu_op(6, &success);
+  else if (consume_keyword("lsl")) instruction = consume_alu_op(7, &success);
+  else if (consume_keyword("lsr")) instruction = consume_alu_op(8, &success);
+  else if (consume_keyword("asr")) instruction = consume_alu_op(9, &success);
+  else if (consume_keyword("rotl")) instruction = consume_alu_op(10, &success);
+  else if (consume_keyword("rotr")) instruction = consume_alu_op(11, &success);
+  else if (consume_keyword("lslc")) instruction = consume_alu_op(12, &success);
+  else if (consume_keyword("lsrc")) instruction = consume_alu_op(13, &success);
+  else if (consume_keyword("add")) instruction = consume_alu_op(14, &success);
+  else if (consume_keyword("addc")) instruction = consume_alu_op(15, &success);
+  else if (consume_keyword("sub")) instruction = consume_alu_op(16, &success);
+  else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
+  else if (consume_keyword("mul")) instruction = consume_alu_op(18, &success);
+  else if (consume_keyword("lui")) instruction = consume_lui(&success);
+  else if (consume_keyword("sw")) instruction = consume_mem(true, false, &success);
+  else if (consume_keyword("lw")) instruction = consume_mem(true, true, &success);
+  else if (consume_keyword("swr")) instruction = consume_mem(false, false, &success);
+  else if (consume_keyword("lwr")) instruction = consume_mem(false, true, &success);
+  else if (consume_keyword("br")) instruction = consume_branch(0, false, &success);
+  else if (consume_keyword("bz")) instruction = consume_branch(1, false, &success);
+  else if (consume_keyword("bnz")) instruction = consume_branch(2, false, &success);
+  else if (consume_keyword("bs")) instruction = consume_branch(3, false, &success);
+  else if (consume_keyword("bns")) instruction = consume_branch(4, false, &success);
+  else if (consume_keyword("bc")) instruction = consume_branch(5, false, &success);
+  else if (consume_keyword("bnc")) instruction = consume_branch(6, false, &success);
+  else if (consume_keyword("bo")) instruction = consume_branch(7, false, &success);
+  else if (consume_keyword("bno")) instruction = consume_branch(8, false, &success);
+  else if (consume_keyword("bp")) instruction = consume_branch(9, false, &success);
+  else if (consume_keyword("bnp")) instruction = consume_branch(10, false, &success);
+  else if (consume_keyword("bg")) instruction = consume_branch(11, false, &success);
+  else if (consume_keyword("bge")) instruction = consume_branch(12, false, &success);
+  else if (consume_keyword("bl")) instruction = consume_branch(13, false, &success);
+  else if (consume_keyword("ble")) instruction = consume_branch(14, false, &success);
+  else if (consume_keyword("ba")) instruction = consume_branch(15, false, &success);
+  else if (consume_keyword("bae")) instruction = consume_branch(16, false, &success);
+  else if (consume_keyword("bb")) instruction = consume_branch(17, false, &success);
+  else if (consume_keyword("bbe")) instruction = consume_branch(18, false, &success);
+  else if (consume_keyword("bra")) instruction = consume_branch(0, true, &success);
+  else if (consume_keyword("bza")) instruction = consume_branch(1, true, &success);
+  else if (consume_keyword("bnza")) instruction = consume_branch(2, true, &success);
+  else if (consume_keyword("bsa")) instruction = consume_branch(3, true, &success);
+  else if (consume_keyword("bnsa")) instruction = consume_branch(4, true, &success);
+  else if (consume_keyword("bca")) instruction = consume_branch(5, true, &success);
+  else if (consume_keyword("bnca")) instruction = consume_branch(6, true, &success);
+  else if (consume_keyword("boa")) instruction = consume_branch(7, true, &success);
+  else if (consume_keyword("bnoa")) instruction = consume_branch(8, true, &success);
+  else if (consume_keyword("bpa")) instruction = consume_branch(9, true, &success);
+  else if (consume_keyword("bnpa")) instruction = consume_branch(10, true, &success);
+  else if (consume_keyword("bga")) instruction = consume_branch(11, true, &success);
+  else if (consume_keyword("bgea")) instruction = consume_branch(12, true, &success);
+  else if (consume_keyword("bla")) instruction = consume_branch(13, true, &success);
+  else if (consume_keyword("blea")) instruction = consume_branch(14, true, &success);
+  else if (consume_keyword("baa")) instruction = consume_branch(15, true, &success);
+  else if (consume_keyword("baea")) instruction = consume_branch(16, true, &success);
+  else if (consume_keyword("bba")) instruction = consume_branch(17, true, &success);
+  else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
+  else if (consume_keyword("sys")) instruction = consume_syscall(&success);
 
   // privileged instructions
-  if (consume_keyword("tlbr")) return consume_tlb_op(0, success);
-  if (consume_keyword("tlbw")) return consume_tlb_op(1, success);
-  if (consume_keyword("tlbc")) return consume_tlb_op(2, success);
-  if (consume_keyword("crmv")) return consume_crmv(success);
-  if (consume_keyword("mode")) return consume_mode_op(success);
-  if (consume_keyword("rfe")) return consume_rfe(success);
+  else if (consume_keyword("tlbr")) instruction = consume_tlb_op(0, &success);
+  else if (consume_keyword("tlbw")) instruction = consume_tlb_op(1, &success);
+  else if (consume_keyword("tlbc")) instruction = consume_tlb_op(2, &success);
+  else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
+  else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
+  else if (consume_keyword("rfe")) instruction = consume_rfe(&success);
   
-  *success = false;
-  return 0;
+  if (!success) *result = ERROR;
+  else *result = NOT_FOUND;
+  return instruction;
 }
 
 // assemble an entire program
@@ -875,13 +895,14 @@ struct InstructionArray* assemble(char const* prog){
 
   valid_labels = create_hash_map(10000);
 
-  bool success = true;
+  enum ConsumeResult success = FOUND;
 
   struct InstructionArray* instructions = create_instruction_array(1000);
 
   while (success){
     // consume any labels, they were already dealt with
     while (skip_newline(), consume_label());
+    skip_newline();
 
     if (pc > ((long)1 << 32)){
       print_error();
@@ -956,7 +977,8 @@ struct InstructionArray* assemble(char const* prog){
       pc += imm;
     } else {
       int instruction = consume_instruction(&success);
-      if (success) instruction_array_append(instructions, instruction);
+      if (success == FOUND) instruction_array_append(instructions, instruction);
+      else if (success == ERROR) goto error;
       pc++;
     }
   }
@@ -967,9 +989,11 @@ struct InstructionArray* assemble(char const* prog){
     goto error;
   }
 
+  destroy_hash_map(valid_labels);
   return instructions;
 
   error:
     destroy_instruction_array(instructions);
+    destroy_hash_map(valid_labels);
     return NULL;
 }

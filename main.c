@@ -46,5 +46,7 @@ int main(int argc, const char *const *const argv){
 
   print_instruction_array(instructions);
 
+  destroy_instruction_array(instructions);
+
   return 0;
 }
