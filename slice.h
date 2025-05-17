@@ -16,4 +16,6 @@ bool is_identifier(const struct Slice* slice);
 
 void print_slice(struct Slice* slice);
 
+void print_slice_err(struct Slice* slice);
+
 size_t hash_slice(const struct Slice* key);

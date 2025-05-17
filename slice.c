@@ -39,6 +39,12 @@ void print_slice(struct Slice* slice) {
   }
 }
 
+void print_slice_err(struct Slice* slice) {
+  for (size_t i = 0; i < slice->len; i++) {
+    fprintf(stderr, "%c", slice->start[i]);
+  }
+}
+
 size_t hash_slice(const struct Slice* key) {
   // djb2
   size_t out = 5381;
