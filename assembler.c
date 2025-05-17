@@ -16,11 +16,12 @@
   Second pass converts to text into binary
 */
 
-static char const * program;
 static char const * current;
 
 static unsigned line_count;
 static unsigned long pc;
+
+char const * current_file;
 
 // map labels to their addresses
 static struct HashMap* valid_labels;
@@ -29,12 +30,12 @@ static struct HashMap* valid_labels;
 static bool is_kernel = false;
 
 // print line causing an error
-static void print_error() {
+static void print_error(void) {
   // avoid printing this twice
   static bool has_printed = false;
 
   if (!has_printed){
-    fprintf(stderr, "Error in line %u: \"", line_count);
+    fprintf(stderr, "Error in %s\nline %u: \"", current_file, line_count);
     
     // get start and end of line
     char const * start = current;
@@ -55,7 +56,7 @@ static void print_error() {
 }
 
 // is the rest of the file just whitespace?
-static bool is_at_end() {
+static bool is_at_end(void) {
   while (isspace(*current)) {
     current += 1;
   }
@@ -64,18 +65,24 @@ static bool is_at_end() {
 }
 
 // skip whitespace and commas until end of line or non-whitespace character
-static void skip() {
+static void skip(void) {
   while ((isspace(*current) && *current != '\n') || *current == ',') {
     current += 1;
   }
 }
 
 // skip until we get to a new nonempty line
-static void skip_newline() {
+static void skip_newline(void) {
   while (*current == '\n') {
     current += 1;
     line_count += 1;
   }
+}
+
+// skip an entire line
+static void skip_line(void){
+  while (*current != '\n') current++; 
+  skip_newline();
 }
 
 // attempt to consume a string, has no effect if a match is not found
@@ -884,22 +891,25 @@ static int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
   else if (consume_keyword("rfe")) instruction = consume_rfe(&success);
+  else *result = NOT_FOUND;
   
   if (!success) *result = ERROR;
-  else *result = NOT_FOUND;
+  
   return instruction;
 }
 
 // second pass, convert to binary
-struct InstructionArray* to_binary(char const* prog){
-  program = prog;
+struct InstructionArray* to_binary(char const* const prog){
   current = prog;
+
+  line_count = 1;
+  pc = 0;
 
   enum ConsumeResult success = FOUND;
 
   struct InstructionArray* instructions = create_instruction_array(1000);
 
-  while (success){
+  while (success == FOUND){
     // consume any labels, they were already dealt with
     while (skip_newline(), consume_label());
     skip_newline();
@@ -998,22 +1008,25 @@ struct InstructionArray* to_binary(char const* prog){
     return NULL;
 }
 
-static void process_labels(char const* prog){
-  program = prog;
+// first pass, find all the labels and their addresses
+static void process_labels(char const* const prog){
   current = prog;
+
+  line_count = 1;
+  pc = 0;
 
   valid_labels = create_hash_map(10000);
 
-  //while (!is_at_end()){
-  //  struct Slice* label = consume_label();
-  //  if (label != NULL){
-//
-  //  }
-  //}
+  while (!is_at_end()){
+    struct Slice* label = consume_label();
+    if (label != NULL) hash_map_insert(valid_labels, label, pc);
+    else skip_line();
+  }
 }
 
 // assemble an entire program
-struct InstructionArray* assemble(char const* prog){
+struct InstructionArray* assemble(char const* const file, char const* const prog){
+  current_file = file;
   process_labels(prog);
   return to_binary(prog);
 }

@@ -29,7 +29,7 @@ int main(int argc, const char *const *const argv){
   }
 
   // map the file in my address space
-  char const* src = (char const *)mmap(
+  char const* const src = (char const * const)mmap(
       0,
       file_stats.st_size,
       PROT_READ,
@@ -41,7 +41,7 @@ int main(int argc, const char *const *const argv){
     exit(1);
   }
 
-  struct InstructionArray* instructions = assemble(src);
+  struct InstructionArray* instructions = assemble(argv[1], src);
   if (instructions == NULL) return 1;
 
   print_instruction_array(instructions);
