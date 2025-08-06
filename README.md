@@ -21,10 +21,10 @@ Remove everything with `make purge`
 
 ## Extending the assembler
 
-To add a new instruction, ...  
-Be aware that adding a new instruction will require changes to the emulator and verilog to go with it.
+To add a new instruction, you will need to write a function that consumes that instruction and outputs the corresponding integer. assembler.c contains useful functions to consume registers, immediates, and other tokens. Then edit `consume_instruction` in assembler.c. Add a new branch to the massive if-statement to detect the keyword for your new instruction, then call your consume function. 
+Be aware that adding a new instruction will require changes to the emulator and verilog to go with it.  
 
-To add a new macro, ... 
+To add a new macro, modify `expand_macros` in preprocessor.c in a similar way.  
 
 Please add some tests for any extensions
 

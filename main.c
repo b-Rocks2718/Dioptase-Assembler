@@ -6,6 +6,7 @@
 
 #include "assembler.h"
 #include "instruction_array.h"
+#include "preprocessor.h"
 
 int main(int argc, const char *const *const argv){
   if (argc != 2) {
@@ -41,12 +42,24 @@ int main(int argc, const char *const *const argv){
     exit(1);
   }
 
-  struct InstructionArray* instructions = assemble(argv[1], src);
-  if (instructions == NULL) return 1;
+  char* preprocessed = preprocess(src);
+  if (preprocessed == NULL) return 1;
+
+  printf("%s\n\n", preprocessed + 1);
+
+  // + 1 to skip over initial null
+  struct InstructionArray* instructions = assemble(argv[1], preprocessed + 1);
+
+  if (instructions == NULL) {
+    free(preprocessed);
+    return 1;
+  }
 
   print_instruction_array(instructions);
+  printf("\n");
 
   destroy_instruction_array(instructions);
+  free(preprocessed);
 
   return 0;
 }

@@ -30,7 +30,7 @@ static struct HashMap* valid_labels;
 static bool is_kernel = false;
 
 // print line causing an error
-static void print_error(void) {
+void print_error(void) {
   // avoid printing this twice
   static bool has_printed = false;
 
@@ -56,7 +56,7 @@ static void print_error(void) {
 }
 
 // is the rest of the file just whitespace?
-static bool is_at_end(void) {
+bool is_at_end(void) {
   while (isspace(*current)) {
     current += 1;
   }
@@ -65,14 +65,14 @@ static bool is_at_end(void) {
 }
 
 // skip whitespace and commas until end of line or non-whitespace character
-static void skip(void) {
+void skip(void) {
   while ((isspace(*current) && *current != '\n') || *current == ',') {
     current += 1;
   }
 }
 
 // skip until we get to a new nonempty line
-static void skip_newline(void) {
+void skip_newline(void) {
   while (*current == '\n') {
     current += 1;
     line_count += 1;
@@ -80,13 +80,13 @@ static void skip_newline(void) {
 }
 
 // skip an entire line
-static void skip_line(void){
-  while (*current != '\n') current++; 
+void skip_line(void){
+  while (*current != '\n' && *current != '\0') current++; 
   skip_newline();
 }
 
 // attempt to consume a string, has no effect if a match is not found
-static bool consume(const char* str) {
+bool consume(const char* str) {
   skip();
   size_t i = 0;
   while (true) {
@@ -106,7 +106,7 @@ static bool consume(const char* str) {
 
 // attempt to consume a keyword, has no effect if a match is not found
 // differs from consume because we ensure that there is a whitespace character at the end
-static bool consume_keyword(const char* str) {
+bool consume_keyword(const char* str) {
   skip();
   size_t i = 0;
   while (true) {
@@ -131,7 +131,7 @@ static bool consume_keyword(const char* str) {
 }
 
 // attempt to consume an identifier, has no effect if a match is not found
-static struct Slice* consume_identifier(void) {
+struct Slice* consume_identifier(void) {
   skip();
   size_t i = 0;
   // identifiers begin with a letter or underscore
@@ -153,20 +153,36 @@ static struct Slice* consume_identifier(void) {
 }
 
 // label is an identifier followed by a colon
-static struct Slice* consume_label(void){
+struct Slice* consume_label(void){
   skip();
   char const * old_current = current;
   struct Slice* label = consume_identifier();
   if (consume(":")) return label;
 
   // undo side effects
-  free(label);
+  if (label != NULL) free(label);
+  current = old_current;
+  return NULL;
+}
+
+// label is an identifier followed by a colon
+bool skip_label(void){
+  skip();
+  char const * old_current = current;
+  struct Slice* label = consume_identifier();
+  if (label != NULL && consume(":")) {
+    free(label);
+    return true;
+  }
+
+  // undo side effects
+  if (label != NULL) free(label);
   current = old_current;
   return NULL;
 }
 
 // attempt to consume a register
-static int consume_register(void) {
+int consume_register(void) {
   skip();
   size_t i = 0;
   // registers begin with an r
@@ -191,7 +207,7 @@ static int consume_register(void) {
 }
 
 // attempt to consume a control register
-static int consume_control_register(void) {
+int consume_control_register(void) {
   skip();
   size_t i = 0;
   // registers begin with an r
@@ -220,7 +236,7 @@ static int consume_control_register(void) {
 }
 
 // attempt to consume an integer literal
-static long consume_literal(enum ConsumeResult* result) {
+long consume_literal(enum ConsumeResult* result) {
   skip();
   bool negate = false;
   char const * old_current = current;
@@ -310,7 +326,7 @@ static long consume_literal(enum ConsumeResult* result) {
 }
 
 // consume a literal immediate or label immediate
-static long consume_immediate(enum ConsumeResult* result){
+long consume_immediate(enum ConsumeResult* result){
   long imm;
   struct Slice* label = consume_identifier();
   if (label != NULL){
@@ -324,6 +340,7 @@ static long consume_immediate(enum ConsumeResult* result){
       fprintf(stderr, "\" has not been defined\n");
       *result = ERROR;
     }
+    free(label);
   } else {
     imm = consume_literal(result);
   }
@@ -332,7 +349,7 @@ static long consume_immediate(enum ConsumeResult* result){
 
 
 
-static int encode_bitwise_immediate(long imm, bool* success){
+int encode_bitwise_immediate(long imm, bool* success){
   if (imm == (imm & 0xFF)){
     return imm;
   } else if (imm == (imm & 0xFF00)){
@@ -351,7 +368,7 @@ static int encode_bitwise_immediate(long imm, bool* success){
   }
 }
 
-static int encode_shift_immediate(long imm, bool* success){
+int encode_shift_immediate(long imm, bool* success){
   if (0 <= imm && imm < 31){
     return imm;
   } else {
@@ -363,7 +380,7 @@ static int encode_shift_immediate(long imm, bool* success){
   }
 }
 
-static int encode_arithmetic_immediate(long imm, bool* success){
+int encode_arithmetic_immediate(long imm, bool* success){
   if (-(1 << 11) <= imm && imm < (1 << 11)){
     return imm & 0xFFF;
   } else {
@@ -376,7 +393,7 @@ static int encode_arithmetic_immediate(long imm, bool* success){
 }
 
 // consume an alu instruction and return the corresponding encoding
-static int consume_alu_op(int alu_op, bool* success){
+int consume_alu_op(int alu_op, bool* success){
   assert(0 <= alu_op && alu_op < 32); // ensure alu_op is valid
 
   int ra = consume_register();
@@ -440,7 +457,7 @@ static int consume_alu_op(int alu_op, bool* success){
   return instruction; 
 }
 
-static int encode_lui_immediate(long imm, bool* success){
+int encode_lui_immediate(long imm, bool* success){
   if ((imm & 0x3FF) == 0 && imm < ((long)1 << 32)){
     return (int)imm >> 10;
   } else {
@@ -452,7 +469,7 @@ static int encode_lui_immediate(long imm, bool* success){
   }
 }
 
-static int consume_lui(bool* success){
+int consume_lui(bool* success){
   enum ConsumeResult result;
   int ra = consume_register();
   if (ra == -1){
@@ -480,7 +497,7 @@ static int consume_lui(bool* success){
   return instruction;
 }
 
-static int encode_memory_immediate(long imm, bool* success){
+int encode_memory_immediate(long imm, bool* success){
   if (imm == (imm & 0xFFF)){
     return imm;
   } else if (imm == (imm & 0x1FFE)){
@@ -500,7 +517,7 @@ static int encode_memory_immediate(long imm, bool* success){
   }
 }
 
-static int consume_mem(bool is_absolute, bool is_load, bool* success){
+int consume_mem(bool is_absolute, bool is_load, bool* success){
   int instruction = 0;
   if (is_absolute){
     instruction |= 3 << 27;
@@ -609,7 +626,7 @@ static int consume_mem(bool is_absolute, bool is_load, bool* success){
   return instruction;
 }
 
-static int encode_branch_immediate(long imm, bool* success){
+int encode_branch_immediate(long imm, bool* success){
   if (-(1 << 23) <= imm && imm < (1 << 23) && ((imm & 0x3) == 0)){
     return imm;
   } else {
@@ -621,7 +638,7 @@ static int encode_branch_immediate(long imm, bool* success){
   }
 }
 
-static int consume_branch(int branch_code, bool is_absolute, bool* success){
+int consume_branch(int branch_code, bool is_absolute, bool* success){
   int instruction = 0;
 
   assert(0 <= branch_code && branch_code < 19); // ensure branch code is valid
@@ -665,7 +682,7 @@ static int consume_branch(int branch_code, bool is_absolute, bool* success){
   return instruction;
 }
 
-static int consume_syscall(bool* success){
+int consume_syscall(bool* success){
   if (consume("EXIT")){
     int instruction = (8 << 27);
 
@@ -680,7 +697,7 @@ static int consume_syscall(bool* success){
   }
 }
 
-static void check_privileges(bool* success){
+void check_privileges(bool* success){
   if (!is_kernel){
     *success = false;
     print_error();
@@ -689,7 +706,7 @@ static void check_privileges(bool* success){
   }
 }
 
-static int consume_tlb_op(int tlb_op, bool* success){
+int consume_tlb_op(int tlb_op, bool* success){
   check_privileges(success);
   assert(0 <= tlb_op && tlb_op < 4); // ensure tlb op is valid
 
@@ -726,7 +743,7 @@ static int consume_tlb_op(int tlb_op, bool* success){
   return instruction;
 }
 
-static int consume_crmv(bool* success){
+int consume_crmv(bool* success){
   check_privileges(success);
   int instruction = 31 << 27;
   instruction |= 1 << 12;
@@ -772,7 +789,7 @@ static int consume_crmv(bool* success){
   return instruction;
 }
 
-static int consume_mode_op(bool* success){
+int consume_mode_op(bool* success){
   check_privileges(success);
 
   int instruction = 31 << 27; // opcode
@@ -794,7 +811,7 @@ static int consume_mode_op(bool* success){
   return instruction;
 }
 
-static int consume_rfe(bool* success){
+int consume_rfe(bool* success){
   check_privileges(success);
 
   int instruction = 31 << 27;
@@ -815,7 +832,7 @@ static int consume_rfe(bool* success){
 }
 
 // consumes a single instruction and converts it to binary or hex
-static int consume_instruction(enum ConsumeResult* result){
+int consume_instruction(enum ConsumeResult* result){
   int instruction;
   bool success = true;
 
@@ -911,7 +928,7 @@ struct InstructionArray* to_binary(char const* const prog){
 
   while (success == FOUND){
     // consume any labels, they were already dealt with
-    while (skip_newline(), consume_label());
+    while (skip_newline(), skip_label());
     skip_newline();
 
     if (pc > ((long)1 << 32)){
@@ -1009,7 +1026,7 @@ struct InstructionArray* to_binary(char const* const prog){
 }
 
 // first pass, find all the labels and their addresses
-static void process_labels(char const* const prog){
+void process_labels(char const* const prog){
   current = prog;
 
   line_count = 1;
