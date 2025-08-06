@@ -712,7 +712,7 @@ int consume_tlb_op(int tlb_op, bool* success){
 
   int instruction = 31 << 27; // opcode
 
-  if (tlb_op == 3){
+  if (tlb_op == 2){
     instruction |= 1 << 11;
   } else {
     int ra = consume_register();
@@ -1037,7 +1037,12 @@ void process_labels(char const* const prog){
   while (!is_at_end()){
     struct Slice* label = consume_label();
     if (label != NULL) hash_map_insert(valid_labels, label, pc);
-    else skip_line();
+    else {
+      enum ConsumeResult result = FOUND;
+      consume_instruction(&result);
+      if (result == FOUND) pc++;
+      else skip_line();
+    }
   }
 }
 
