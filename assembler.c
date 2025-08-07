@@ -9,6 +9,7 @@
 #include "assembler.h"
 #include "hashmap.h"
 #include "instruction_array.h"
+#include "preprocessor.h"
 
 /*
   Two-pass assembler.
@@ -16,18 +17,17 @@
   Second pass converts to text into binary
 */
 
-static char const * current;
+char const * current;
+unsigned line_count = 1;
+unsigned long pc = 0;
 
-static unsigned line_count;
-static unsigned long pc;
+// does the file wish to use pivileges instructions?
+bool is_kernel = false;
 
 char const * current_file;
 
 // map labels to their addresses
 static struct HashMap* valid_labels;
-
-// does the file wish to use pivileges instructions?
-static bool is_kernel = false;
 
 // print line causing an error
 void print_error(void) {
@@ -58,6 +58,7 @@ void print_error(void) {
 // is the rest of the file just whitespace?
 bool is_at_end(void) {
   while (isspace(*current)) {
+    if (*current == '\n') line_count++;
     current += 1;
   }
   if (*current != 0) return false;
@@ -66,16 +67,16 @@ bool is_at_end(void) {
 
 // skip whitespace and commas until end of line or non-whitespace character
 void skip(void) {
-  while ((isspace(*current) && *current != '\n') || *current == ',') {
-    current += 1;
+  while ((isspace(*current) && *current != '\n') || *current == ',' || *current == ';') {
+    current++;
   }
 }
 
 // skip until we get to a new nonempty line
 void skip_newline(void) {
-  while (*current == '\n') {
-    current += 1;
-    line_count += 1;
+  while (isspace(*current)) {
+    if (*current == '\n') line_count++;
+    current++;
   }
 }
 
@@ -107,7 +108,7 @@ bool consume(const char* str) {
 // attempt to consume a keyword, has no effect if a match is not found
 // differs from consume because we ensure that there is a whitespace character at the end
 bool consume_keyword(const char* str) {
-  skip();
+  // skip is handled by caller so that this function is useful for preprocesser/macros
   size_t i = 0;
   while (true) {
     char const expected = str[i];
@@ -459,7 +460,7 @@ int consume_alu_op(int alu_op, bool* success){
 
 int encode_lui_immediate(long imm, bool* success){
   if ((imm & 0x3FF) == 0 && imm < ((long)1 << 32)){
-    return (int)imm >> 10;
+    return ((int)imm >> 10) & 0x3FFFFF;
   } else {
     *success = false;
     print_error();
@@ -498,14 +499,17 @@ int consume_lui(bool* success){
 }
 
 int encode_memory_immediate(long imm, bool* success){
-  if (imm == (imm & 0xFFF)){
-    return imm;
-  } else if (imm == (imm & 0x1FFE)){
-    return (imm >> 1) | (1 << 12);
-  } else if (imm == (imm & 0x3FFC)) {
-    return (imm >> 2) | (2 << 12);
-  } else if (imm == (imm & 0x7FF8)){
-    return (imm >> 3) | (3 << 12);
+  // top n bits must all be 0s or all be 1s
+  // bottom m bits must be 0s
+  // the 12 bits in the middle become part of the instruction
+  if (imm == (imm & 0x7FF) || ~imm == (~imm & 0x7FF)){
+    return imm & 0xFFF;
+  } else if ((imm == (imm & 0xFFF) || ~imm == (~imm & 0xFFF)) && ((imm & 1) == 0)){
+    return ((imm >> 1) & 0xFFF)| (1 << 12);
+  } else if ((imm == (imm & 0x1FFF) || ~imm == (~imm & 0x1FFF)) && ((imm & 3) == 0)){
+    return ((imm >> 2) & 0xFFF) | (2 << 12);
+  } else if ((imm == (imm & 0x3FFF) || ~imm == (~imm & 0x3FFF)) && ((imm & 7) == 0)){
+    return ((imm >> 3) & 0xFFF) | (3 << 12);
   } else {
     // can't encode
     print_error();
@@ -698,16 +702,22 @@ int consume_syscall(bool* success){
 }
 
 void check_privileges(bool* success){
+  static bool has_printed = false;
   if (!is_kernel){
     *success = false;
-    print_error();
-    fprintf(stderr, "Used privileged instruction\n");
-    fprintf(stderr, "Put .kernel somewhere in the file if this was intentional\n");
+    if (!has_printed){
+      has_printed = true;
+      print_error();
+      fprintf(stderr, "Used privileged instruction\n");
+      fprintf(stderr, "Put .kernel somewhere in the file if this was intentional\n");
+    }
   }
 }
 
 int consume_tlb_op(int tlb_op, bool* success){
   check_privileges(success);
+  if (!success) return 0;
+
   assert(0 <= tlb_op && tlb_op < 4); // ensure tlb op is valid
 
   int instruction = 31 << 27; // opcode
@@ -745,6 +755,8 @@ int consume_tlb_op(int tlb_op, bool* success){
 
 int consume_crmv(bool* success){
   check_privileges(success);
+  if (!success) return 0;
+
   int instruction = 31 << 27;
   instruction |= 1 << 12;
 
@@ -791,6 +803,7 @@ int consume_crmv(bool* success){
 
 int consume_mode_op(bool* success){
   check_privileges(success);
+  if (!success) return 0;
 
   int instruction = 31 << 27; // opcode
   instruction |= 2 << 12;
@@ -813,6 +826,7 @@ int consume_mode_op(bool* success){
 
 int consume_rfe(bool* success){
   check_privileges(success);
+  if (!success) return 0;
 
   int instruction = 31 << 27;
   instruction |= 3 << 12;
@@ -831,12 +845,71 @@ int consume_rfe(bool* success){
   return instruction;
 }
 
+// consume a mov hack return the corresponding encoding
+int consume_mov_hack(int mov_type, bool* success){
+  assert(0 <= mov_type && mov_type < 4); // ensure mov_type is valid
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  enum ConsumeResult result;
+  long imm = consume_immediate(&result);
+  if (result != FOUND){
+    print_error();
+    if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+    *success = false;
+    return 0;
+  }
+
+  // [0] movu := lui rA, (imm & 0xFFFFFC00)
+  // [1] movl := addi rA, rA, (imm & 0x3FF)
+  // [2] movu8 := lui rA, ((imm - 8) & 0xFFFFFC00)
+  // [3] movl8 := addi rA, rA, ((imm - 8) & 0x3FF)
+
+  if (mov_type & 2) imm -= 8;
+  
+  int instruction = 0;
+
+  if (mov_type & 1){
+    // this is movl or movl8
+
+    instruction |= 1 << 27; // opcode for add
+    instruction |= ra << 22;
+    instruction |= ra << 17;
+    instruction |= 14 << 12; // add is 14
+
+    int encoding = encode_arithmetic_immediate(imm & 0x3FF, success);
+
+    assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
+
+    instruction |= encoding;
+  } else {
+    // this is movu or movu8
+    int encoding = encode_lui_immediate(imm & 0xFFFFFC00, success);
+
+    assert(encoding == (encoding & 0x3FFFFF)); // ensure immediate fits in 22 bits
+
+    int instruction = 2 << 27; // opcode for lui
+    instruction |= ra << 22;
+    instruction |= encoding;
+  }
+  
+  return instruction; 
+}
+
 // consumes a single instruction and converts it to binary or hex
 int consume_instruction(enum ConsumeResult* result){
   int instruction;
   bool success = true;
 
   // user instructions
+  skip();
   if (consume_keyword("and")) instruction = consume_alu_op(0, &success);
   else if (consume_keyword("nand")) instruction = consume_alu_op(1, &success);
   else if (consume_keyword("or")) instruction = consume_alu_op(2, &success);
@@ -908,6 +981,13 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
   else if (consume_keyword("rfe")) instruction = consume_rfe(&success);
+
+  // hacks to make movi and call work
+  else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
+  else if (consume_keyword("movl")) instruction = consume_mov_hack(1, &success);
+  else if (consume_keyword("movu8")) instruction = consume_mov_hack(2, &success);
+  else if (consume_keyword("movl8")) instruction = consume_mov_hack(3, &success);
+
   else *result = NOT_FOUND;
   
   if (!success) *result = ERROR;
@@ -915,10 +995,37 @@ int consume_instruction(enum ConsumeResult* result){
   return instruction;
 }
 
+// first pass, find all the labels and their addresses
+bool process_labels(char const* const prog){
+  current = prog;
+  line_count = 1;
+  pc = 0;
+
+  valid_labels = create_hash_map(10000);
+
+  while (!is_at_end()){
+    struct Slice* label = consume_label();
+    if (label != NULL) hash_map_insert(valid_labels, label, pc);
+    else {
+      enum ConsumeResult result = FOUND;
+      skip();
+      if (consume_keyword(".kernel")) {
+        is_kernel = true;
+        continue;
+      }
+      
+      current++;
+
+      if (result == FOUND) pc++;
+      else return false;
+    }
+  }
+  return true;
+}
+
 // second pass, convert to binary
 struct InstructionArray* to_binary(char const* const prog){
   current = prog;
-
   line_count = 1;
   pc = 0;
 
@@ -927,6 +1034,7 @@ struct InstructionArray* to_binary(char const* const prog){
   struct InstructionArray* instructions = create_instruction_array(1000);
 
   while (success == FOUND){
+
     // consume any labels, they were already dealt with
     while (skip_newline(), skip_label());
     skip_newline();
@@ -1025,30 +1133,13 @@ struct InstructionArray* to_binary(char const* const prog){
     return NULL;
 }
 
-// first pass, find all the labels and their addresses
-void process_labels(char const* const prog){
-  current = prog;
-
-  line_count = 1;
-  pc = 0;
-
-  valid_labels = create_hash_map(10000);
-
-  while (!is_at_end()){
-    struct Slice* label = consume_label();
-    if (label != NULL) hash_map_insert(valid_labels, label, pc);
-    else {
-      enum ConsumeResult result = FOUND;
-      consume_instruction(&result);
-      if (result == FOUND) pc++;
-      else skip_line();
-    }
-  }
-}
-
 // assemble an entire program
 struct InstructionArray* assemble(char const* const file, char const* const prog){
   current_file = file;
-  process_labels(prog);
+  is_kernel = false;
+  if (!process_labels(prog)) {
+    destroy_hash_map(valid_labels);
+    return NULL;
+  }
   return to_binary(prog);
 }

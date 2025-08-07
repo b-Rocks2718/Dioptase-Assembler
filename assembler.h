@@ -2,6 +2,14 @@
 
 #include "stdbool.h"
 
+extern char const * current_file;
+extern char const * current;
+extern unsigned line_count;
+extern unsigned long pc;
+
+// does the file wish to use pivileges instructions?
+extern bool is_kernel;
+
 struct InstructionArray* assemble(char const* const file, char const* prog);
 
 enum ConsumeResult {
@@ -43,6 +51,9 @@ bool skip_label(void);
 
 // attempt to consume a register
 int consume_register(void);
+
+int consume_control_register(void);
+
 // attempt to consume an integer literal
 long consume_literal(enum ConsumeResult* result);
 

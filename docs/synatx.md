@@ -2,7 +2,7 @@
 
 ### General Info
 
-Put each instruction on a new line  
+Put each instruction on a new line. Semicolons between instructions is optional.    
 
 Labels are defined by any string that begins with a letter or underscore and is followed by any sequence of letters, numbers, underscores, or periods.
 To define a label, append a colon to the end.
@@ -53,7 +53,7 @@ Note that the immediates that are possible to be encoded varies per instruction.
 
 #### Memory Instructions
 
-Memory instructions are special because they are RRR instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets. For `sw` and `lw`, labels cannot be used as the immediate (use pc-relative addressing to access labels).  
+Memory instructions are special because they are RRI instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets. For `sw` and `lw`, labels cannot be used as the immediate (use pc-relative addressing to access labels).  
 
 Examples:  
 `lw r1, [r2]` no offset  
@@ -107,11 +107,11 @@ Can put any 32 bit value in a register
 `call imm` - Alias for
 ```
 movi r31, <imm - 8>
-brl  r31, r31
+bl  r31, r31
 ```
-Do a -8 because we want the offset from the brl instruction, not the movi
+Do a -8 because we want the offset from the bl instruction, not the movi
 
-`ret` - Alias for  `brl r0, r31`
+`ret` - Alias for  `bl r0, r31`
 
 ## Directives
 

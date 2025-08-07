@@ -42,7 +42,7 @@ int main(int argc, const char *const *const argv){
     exit(1);
   }
 
-  char* preprocessed = preprocess(src);
+  char* preprocessed = preprocess(argv[1], src);
   if (preprocessed == NULL) return 1;
 
   printf("%s\n\n", preprocessed + 1);
