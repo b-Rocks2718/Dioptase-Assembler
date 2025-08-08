@@ -6,10 +6,10 @@
 #include "preprocessor.h"
 #include "assembler.h"
 
-static size_t result_index = 0;
+static size_t result_index;
 
-static char* result = NULL;
-static size_t capacity = 50; // using a dynamic array here
+static char* result;
+static size_t capacity; // using a dynamic array here
 
 // expand dynamic array
 bool expand_capacity(void){
@@ -31,7 +31,7 @@ bool check_capacity(void){
 }
 
 // remove single line # comments
-bool skip_comments(char const* const prog){
+bool skip_comments(void){
   if (*current == '#'){
     while (*current != '\n') {
       if (*current == '\0') return false;
@@ -259,44 +259,59 @@ bool expand_macros(void){
 
 // copy the program into a new string, but without the comments
 // expand macros into real instructions
-char * preprocess(char const* const file, char const* const prog){
-  current_file = file;
+char** preprocess(int num_files, int* file_names, 
+  const char *const *const argv, const char * const * const files){
 
-  // initialize parser
-  current = prog;
-  line_count = 1;
-  pc = 0;
-  is_kernel = false;
+  char ** result_list = malloc(num_files * sizeof(char**));
 
-  result = malloc(sizeof(char) * capacity);
-  if (result == NULL) return NULL;
+  for (int i = 0; i < num_files; ++i){
 
-  // initial null used to detect start of program
-  // used when printing errors
-  result[result_index] = '\0';
-  result_index++; 
+    // initialize parser
+    current = files[i];
+    line_count = 1;
+    pc = 0;
+    is_kernel = false;
+    result_index = 0;
+    capacity = 50;
+    current_file = argv[file_names[i]];
 
-  while (*current != '\0'){
-    // expand dynamic array if necessary, exit if realloc fails 
-    if (!check_capacity()) return NULL;
+    result = malloc(sizeof(char) * capacity);
+    if (result == NULL) return NULL;
 
-    // skip comments, exit if EOF is reached
-    if (!skip_comments(prog)) goto end;
+    // initial null used to detect start of program
+    // used when printing errors
+    result[result_index] = '\0';
+    result_index++; 
 
-    if (!expand_macros()) {
-      free(result);
-      return NULL;
+    while (*current != '\0'){
+      // expand dynamic array if necessary, exit if realloc fails 
+      if (!check_capacity()) {
+        for (int j = 0; j < i; ++j) free(result_list[j]);
+        free(result_list);
+        return NULL;
+      }
+
+      // skip comments, exit if EOF is reached
+      if (!skip_comments()) goto end;
+
+      if (!expand_macros()) {
+        for (int j = 0; j < i; ++j) free(result_list[j]);
+        free(result);
+        free(result_list);
+        return NULL;
+      }
+
+      // write one character, then repeat loop
+      result[result_index] = *current;
+      if (*current == '\n') line_count++;
+      result_index++;
+      current++;
     }
 
-    // write one character, then repeat loop
-    result[result_index] = *current;
-    if (*current == '\n') line_count++;
-    result_index++;
-    current++;
+    // include null terminator, realloc should ensure there's always room
+    end:  result[result_index] = 0;
+    result_list[i] = result;
   }
 
-  // include null terminator, realloc should ensure there's always room
-  end:  result[result_index] = 0;
-
-  return result;
+  return result_list;
 }

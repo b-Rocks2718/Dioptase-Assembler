@@ -1,3 +1,4 @@
 #pragma once
 
-char* preprocess(char const* const file, char const* prog);
+char** preprocess(int num_files, int* file_names, 
+  const char *const *const argv, const char * const * const files);

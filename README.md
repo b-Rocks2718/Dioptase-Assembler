@@ -15,9 +15,8 @@ Remove all generated files but the final executable with `make clean`
 Remove everything with `make purge`
 
 #### Supported Flags:  
-`-pre` if you wish to generate a file containing the output of the preprocessor (all macros expanded)  
-`-bin` if you wish to generate a binary file as output instead of a `.hex` file. The assembler generates a text file containing the instructions as hex by default.  
-`-both` if you want to generate the `.bin` and `.hex` files  
+`-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
+`-o` to name the output file (./a.hex is the default)
 
 ## Extending the assembler
 

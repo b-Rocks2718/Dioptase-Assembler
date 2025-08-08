@@ -15,7 +15,7 @@ loop:
     mov cr2, cr3
 
 .global loop2
-
+loop2:
 
 .global loop3
     

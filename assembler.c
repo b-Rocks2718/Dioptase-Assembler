@@ -25,9 +25,11 @@ unsigned long pc = 0;
 bool is_kernel = false;
 
 char const * current_file;
+int current_file_index;
 
 // map labels to their addresses
-static struct HashMap* valid_labels;
+static struct HashMap** local_labels;
+static struct HashMap* global_labels;
 
 // print line causing an error
 void print_error(void) {
@@ -331,8 +333,16 @@ long consume_immediate(enum ConsumeResult* result){
   long imm;
   struct Slice* label = consume_identifier();
   if (label != NULL){
-    if (hash_map_contains(valid_labels, label)){
-      imm = hash_map_get(valid_labels, label) - pc - 1;
+    if (label_has_definition(local_labels[current_file_index], label)){
+      imm = hash_map_get(local_labels[current_file_index], label) - pc - 1;
+
+      // if this label is global, the global entry should match
+      if (label_has_definition(global_labels, label))
+        assert(imm == hash_map_get(global_labels, label) - pc - 1);
+      
+      *result = FOUND;
+    } else if (label_has_definition(global_labels, label)){
+      imm = hash_map_get(global_labels, label) - pc - 1;
       *result = FOUND;
     } else {
       print_error();
@@ -999,39 +1009,99 @@ int consume_instruction(enum ConsumeResult* result){
 bool process_labels(char const* const prog){
   current = prog;
   line_count = 1;
-  pc = 0;
 
-  valid_labels = create_hash_map(10000);
+  local_labels[current_file_index] = create_hash_map(1000);
 
   while (!is_at_end()){
     struct Slice* label = consume_label();
-    if (label != NULL) hash_map_insert(valid_labels, label, pc);
-    else {
-      enum ConsumeResult result = FOUND;
+    if (label != NULL) {
+      bool label_was_used = false;
+
+      // check for duplicates 
+      if (hash_map_contains(local_labels[current_file_index], label)){
+        if (label_has_definition(local_labels[current_file_index], label)){
+          // duplicate label error
+          print_error();
+          fprintf(stderr, "Duplicate label\n");
+          free(label);
+          return false;
+        } else {
+          make_defined(local_labels[current_file_index], label, pc);
+        }
+      } else {
+        hash_map_insert(local_labels[current_file_index], label, pc, true);
+        label_was_used = true;
+      }
+
+      // check for duplicates 
+      if (hash_map_contains(global_labels, label)){
+        if (label_has_definition(global_labels, label)){
+          // duplicate label error
+          print_error();
+          fprintf(stderr, "Duplicate global label\n");
+          if (!label_was_used) free(label);
+          return false;
+        } else {
+          make_defined(global_labels, label, pc);
+        }
+      }
+
+      if (!label_was_used) free(label);
+
+    } else {
       skip();
       if (consume_keyword(".kernel")) {
         is_kernel = true;
         continue;
       }
+
+      if (consume_keyword(".global")) {
+        
+        struct Slice* label = consume_identifier();
+        bool label_used = false;
+        if (label != NULL){
+          if (!hash_map_contains(global_labels, label)){
+            hash_map_insert(global_labels, label, 0, false);
+            label_used = true;
+          }
+
+          if (!hash_map_contains(local_labels[current_file_index], label)){
+            if (label_used){
+              // we need to make a copy
+              struct Slice* label_copy = malloc(sizeof(struct Slice));
+              label_copy->len = label->len;
+              label_copy->start = label->start;
+              label = label_copy;
+            }
+            hash_map_insert(local_labels[current_file_index], label, 0, false);
+            label_used = true;
+          } else {
+            make_defined(global_labels, label, hash_map_get(local_labels[current_file_index], label));
+          } 
+          
+          if (!label_used) free(label);
+
+        } else {
+          print_error();
+          fprintf(stderr, ".global directive requires a label\n");
+          return false;
+        }
+
+        continue;
+      }
       
       current++;
-
-      if (result == FOUND) pc++;
-      else return false;
     }
   }
   return true;
 }
 
 // second pass, convert to binary
-struct InstructionArray* to_binary(char const* const prog){
+bool to_binary(char const* const prog, struct InstructionArray* instructions){
   current = prog;
   line_count = 1;
-  pc = 0;
 
   enum ConsumeResult success = FOUND;
-
-  struct InstructionArray* instructions = create_instruction_array(1000);
 
   while (success == FOUND){
 
@@ -1042,7 +1112,7 @@ struct InstructionArray* to_binary(char const* const prog){
     if (pc > ((long)1 << 32)){
       print_error();
       fprintf(stderr, "Program does not fit in 32-bit address space\n");
-      goto error;
+      return false;
     }
 
     // directives
@@ -1052,7 +1122,9 @@ struct InstructionArray* to_binary(char const* const prog){
       // ensure the first pass didn't miss anything
       struct Slice* name = consume_identifier();
       assert(name);
-      assert(hash_map_contains(valid_labels, name));
+      assert(hash_map_contains(local_labels[current_file_index], name));
+      assert(hash_map_contains(global_labels, name));
+      free(name);
     }
     else if (consume_keyword(".kernel")); // handled in first pass
     else if (consume_keyword(".origin")) { 
@@ -1061,16 +1133,16 @@ struct InstructionArray* to_binary(char const* const prog){
       if (result != FOUND){
         print_error();
         fprintf(stderr, "\n");
-        goto error;
+        return false;
       }
       if (imm < pc){
         print_error();
         fprintf(stderr, ".origin cannot be used to go backwards\n");
-        goto error;
+        return false;
       } else if (imm >= ((long)1 << 32)){
         print_error();
         fprintf(stderr, ".origin address must be a 32 bit integer\n");
-        goto error;
+        return false;
       } else {
         for (int i = 0; i < imm - pc; ++i) 
           instruction_array_append(instructions, 0);
@@ -1083,14 +1155,14 @@ struct InstructionArray* to_binary(char const* const prog){
       if (result != FOUND){
         print_error();
         if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
-        goto error;
+        return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
         instruction_array_append(instructions, imm);
       } else {
         print_error();
         fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
-        goto error;
+        return false;
       }
     }
     else if (consume_keyword(".space")) { 
@@ -1099,7 +1171,7 @@ struct InstructionArray* to_binary(char const* const prog){
       if (result != FOUND){
         print_error();
         if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
-        goto error;
+        return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
         for (int i = 0; i < imm; ++i) 
@@ -1107,13 +1179,13 @@ struct InstructionArray* to_binary(char const* const prog){
       } else {
         print_error();
         fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
-        goto error;
+        return false;
       }
       pc += imm;
     } else {
       int instruction = consume_instruction(&success);
       if (success == FOUND) instruction_array_append(instructions, instruction);
-      else if (success == ERROR) goto error;
+      else if (success == ERROR) return false;
       pc++;
     }
   }
@@ -1121,25 +1193,54 @@ struct InstructionArray* to_binary(char const* const prog){
   if (!is_at_end()) {
     print_error();
     fprintf(stderr, "Unrecognized instruction\n");
-    goto error;
+    return false;
   }
 
-  destroy_hash_map(valid_labels);
-  return instructions;
-
-  error:
-    destroy_instruction_array(instructions);
-    destroy_hash_map(valid_labels);
-    return NULL;
+  return true;
 }
 
 // assemble an entire program
-struct InstructionArray* assemble(char const* const file, char const* const prog){
-  current_file = file;
+struct InstructionArray* assemble(int num_files, int* file_names, 
+  const char *const *const argv, char** files){
+
   is_kernel = false;
-  if (!process_labels(prog)) {
-    destroy_hash_map(valid_labels);
-    return NULL;
+
+  current_file_index = 0;
+
+  local_labels = malloc(num_files * sizeof(struct HashMap*));
+
+  // make a hashmap of labels for each file + one global hashmap for global labels
+  global_labels = create_hash_map(1000);
+  pc = 0;
+  for (int i = 0; i < num_files; ++i){
+    current_file_index = i;
+    current_file = argv[file_names[i]];
+    if (!process_labels(files[i] + 1)) {
+      for (int j = 0; j <= i; ++j) destroy_hash_map(local_labels[j]);
+      free(local_labels);
+      destroy_hash_map(global_labels);
+      return NULL;
+    }
   }
-  return to_binary(prog);
+
+  struct InstructionArray* instructions = create_instruction_array(1000);
+
+  pc = 0;
+  for (int i = 0; i < num_files; ++i){
+    current_file_index = i;
+    current_file = argv[file_names[i]];
+    if (!to_binary(files[i] + 1, instructions)){
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+      free(local_labels);
+      destroy_hash_map(global_labels);
+      destroy_instruction_array(instructions);
+      return NULL;
+    }
+  }
+
+  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+  free(local_labels);
+  destroy_hash_map(global_labels);
+
+  return instructions;
 }
