@@ -249,6 +249,15 @@ long consume_literal(enum ConsumeResult* result) {
     skip();
   }
 
+  // edge case for zero literal
+  // (only time leading 0 is allowed)
+  if (*current == '0' && 
+    (isspace(*(current + 1)) || *(current + 1) == '\0')){
+      *result = FOUND;
+      current++;
+      return 0;
+  }
+
   if (isdigit(*current) && *current != '0') {
     // decimal literal
     long v = 0;
@@ -415,14 +424,20 @@ int consume_alu_op(int alu_op, bool* success){
     *success = false;
     return 0;
   }
-  int rb = consume_register();
-  if (rb == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
+
+  // edge case for 'not' because it only has 2 parameters
+  int rb = 0;
+  if (alu_op != 6){
+    rb = consume_register();
+    if (rb == -1){
+      print_error();
+      fprintf(stderr, "Invalid register\n");
+      fprintf(stderr, "Valid registers are r0 - r31\n");
+      *success = false;
+      return 0;
+    }
   }
+  
   int rc = consume_register();
   int instruction = 0;
   if (rc == -1){
@@ -1013,6 +1028,7 @@ bool process_labels(char const* const prog){
   local_labels[current_file_index] = create_hash_map(1000);
 
   while (!is_at_end()){
+
     struct Slice* label = consume_label();
     if (label != NULL) {
       bool label_was_used = false;
@@ -1053,9 +1069,7 @@ bool process_labels(char const* const prog){
       if (consume_keyword(".kernel")) {
         is_kernel = true;
         continue;
-      }
-
-      if (consume_keyword(".global")) {
+      } else if (consume_keyword(".global")) {
         
         struct Slice* label = consume_identifier();
         bool label_used = false;
@@ -1088,9 +1102,53 @@ bool process_labels(char const* const prog){
         }
 
         continue;
+      } else if (consume_keyword(".origin")) { 
+        enum ConsumeResult result; 
+        long imm = consume_literal(&result);
+        if (result != FOUND){
+          print_error();
+          fprintf(stderr, "\n");
+          return false;
+        }
+        if (imm < pc){
+          print_error();
+          fprintf(stderr, ".origin cannot be used to go backwards\n");
+          return false;
+        } else if (imm >= ((long)1 << 32)){
+          print_error();
+          fprintf(stderr, ".origin address must be a 32 bit integer\n");
+          return false;
+        }
+        pc = imm;
+        continue;
+      }
+      else if (consume_keyword(".fill")) {
+        enum ConsumeResult result; 
+        consume_literal(&result);
+        if (result != FOUND){
+          print_error();
+          if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+          return false;
+        }
+        pc++;
+        continue;
+      }
+      else if (consume_keyword(".space")) { 
+        enum ConsumeResult result; 
+        long imm = consume_literal(&result);
+        if (result != FOUND){
+          print_error();
+          if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+          return false;
+        }
+        pc += imm;
+        continue;
       }
       
-      current++;
+      enum ConsumeResult result;
+      consume_instruction(&result);
+      pc++;
+      if (result == ERROR) return false;
     }
   }
   return true;
@@ -1164,6 +1222,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
         return false;
       }
+      pc++;
     }
     else if (consume_keyword(".space")) { 
       enum ConsumeResult result; 
