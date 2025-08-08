@@ -1,0 +1,3 @@
+  nop
+  call func
+  nop
