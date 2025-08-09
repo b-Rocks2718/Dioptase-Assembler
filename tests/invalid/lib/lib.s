@@ -1,0 +1,4 @@
+func:
+  nop
+  nop
+  nop

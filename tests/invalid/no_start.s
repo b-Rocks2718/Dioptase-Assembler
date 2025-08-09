@@ -1,6 +1,5 @@
     # test different registers
     # test arithmetic immediate encoding
-_start:
     add r0, r2, 11
     add r3, r4, 0b11
     add r5, r6, 0o11

@@ -26,6 +26,7 @@ bool is_kernel = false;
 
 char const * current_file;
 int current_file_index;
+int pass_number = 1;
 
 // map labels to their addresses
 static struct HashMap** local_labels;
@@ -117,7 +118,7 @@ bool consume_keyword(const char* str) {
     char const found = current[i];
     if (expected == 0) {
       /* survived to the end of the expected string */
-      if (isspace(found)) {
+      if (isspace(found) || found == '\0') {
         // word break
         current += i;
         return true;
@@ -188,8 +189,13 @@ bool skip_label(void){
 int consume_register(void) {
   skip();
   size_t i = 0;
+
+  if (consume("sp")) return 1;
+  else if (consume("bp")) return 2;
+  else if (consume("ra")) return 31;
+
   // registers begin with an r
-  if (current[i] == 'r') {
+  else if (current[i] == 'r') {
     int v = 0;
     i += 1;
     while(isdigit(current[i])) {
@@ -201,12 +207,8 @@ int consume_register(void) {
     if (v > 31) return -1;
     current += i;
     return v;
-  } else {
-    if (consume("sp")) return 1;
-    else if (consume("bp")) return 2;
-    else if (consume("ra")) return 31;
-    else return -1;
   }
+  else return -1;
 }
 
 // attempt to consume a control register
@@ -233,7 +235,7 @@ int consume_control_register(void) {
     else if (consume("imr")) return 3;
     else if (consume("epc")) return 4;
     else if (consume("efg")) return 5;
-    else if (consume("epc")) return 6;
+    else if (consume("cdv")) return 6;
     else return -1;
   }
 }
@@ -337,21 +339,28 @@ long consume_literal(enum ConsumeResult* result) {
   }
 }
 
-// consume a literal immediate or label immediate
-long consume_immediate(enum ConsumeResult* result){
-  long imm;
+long consume_label_imm(enum ConsumeResult* result){
   struct Slice* label = consume_identifier();
+  long imm;
   if (label != NULL){
+
+    // don't try to decode labels on first pass
+    if (pass_number == 1) {
+      *result = FOUND;
+      free(label);
+      return 0;
+    }
+
     if (label_has_definition(local_labels[current_file_index], label)){
-      imm = hash_map_get(local_labels[current_file_index], label) - pc - 1;
+      imm = hash_map_get(local_labels[current_file_index], label) - pc - 4;
 
       // if this label is global, the global entry should match
       if (label_has_definition(global_labels, label))
-        assert(imm == hash_map_get(global_labels, label) - pc - 1);
+        assert(imm == hash_map_get(global_labels, label) - pc - 4);
       
       *result = FOUND;
     } else if (label_has_definition(global_labels, label)){
-      imm = hash_map_get(global_labels, label) - pc - 1;
+      imm = hash_map_get(global_labels, label) - pc - 4;
       *result = FOUND;
     } else {
       print_error();
@@ -362,12 +371,20 @@ long consume_immediate(enum ConsumeResult* result){
     }
     free(label);
   } else {
-    imm = consume_literal(result);
+    *result = NOT_FOUND;
   }
   return imm;
 }
 
-
+// consume a literal immediate or label immediate
+long consume_immediate(enum ConsumeResult* result){
+  long imm = consume_label_imm(result);
+  if (*result == NOT_FOUND){
+    imm = consume_literal(result);
+    *result = FOUND;
+  }
+  return imm;
+}
 
 int encode_bitwise_immediate(long imm, bool* success){
   if (imm == (imm & 0xFF)){
@@ -523,7 +540,7 @@ int consume_lui(bool* success){
   return instruction;
 }
 
-int encode_memory_immediate(long imm, bool* success){
+int encode_absolute_memory_immediate(long imm, bool* success){
   // top n bits must all be 0s or all be 1s
   // bottom m bits must be 0s
   // the 12 bits in the middle become part of the instruction
@@ -546,17 +563,42 @@ int encode_memory_immediate(long imm, bool* success){
   }
 }
 
+int encode_relative_memory_immediate(long imm, bool* success){
+  // top n bits must all be 0s or all be 1s
+  // bottom 2 bits must be 0s
+  // the 16 bits in the middle become part of the instruction
+  if ((imm == (imm & 0x3FFFF) || ~imm == (~imm & 0x3FFFF)) && ((imm & 3) == 0)){
+    return (imm >> 2) & 0xFFFF;
+  } else {
+    // can't encode
+    print_error();
+    fprintf(stderr, "Invalid immediate for memory instruction\n");
+    fprintf(stderr, "Immediate must be a 18 bit number that's divisible by 4\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+}
+
+int encode_long_relative_memory_immediate(long imm, bool* success){
+  // top n bits must all be 0s or all be 1s
+  // bottom 2 bits must be 0s
+  // the 21 bits in the middle become part of the instruction
+  if ((imm == (imm & 0x7FFFFF) || ~imm == (~imm & 0x7FFFFF)) && ((imm & 3) == 0)){
+    return (imm >> 2) & 0x1FFFFF;
+  } else {
+    // can't encode
+    print_error();
+    fprintf(stderr, "Invalid immediate for memory instruction\n");
+    fprintf(stderr, "Immediate must be a 23 bit number that's divisible by 4\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+}
+
 int consume_mem(bool is_absolute, bool is_load, bool* success){
   int instruction = 0;
-  if (is_absolute){
-    instruction |= 3 << 27;
-  } else {
-    instruction |= 4 << 27;
-  }
-
-  if (is_load){
-    instruction |= 1 << 16;
-  }
 
   int ra = consume_register();
   if (ra == -1){
@@ -576,11 +618,7 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
 
   int rb = consume_register();
   if (rb == -1){
-    if (!is_absolute){
-      // relative addressing - use r0
-      rb = 0;
-    }
-    else {
+    if (is_absolute){
       print_error();
       fprintf(stderr, "Invalid register\n");
       fprintf(stderr, "Valid registers are r0 - r31\n");
@@ -588,9 +626,6 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
       return 0;
     }
   }
-
-  instruction |= ra << 22;
-  instruction |= rb << 17;
 
   long imm;
   int y;
@@ -646,22 +681,50 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
       return 0;
     }
   }
-  int encoding = encode_memory_immediate(imm, success);
-  assert(encoding == (encoding & 0x3FFF)); // ensure encoding is 14 bits
+  int encoding;
+  
+  if (is_absolute) encoding = encode_absolute_memory_immediate(imm, success);
+  else if (rb != -1) encoding = encode_relative_memory_immediate(imm, success);
+  else encoding = encode_long_relative_memory_immediate(imm, success);
 
-  instruction |= (y << 14);
+  if (is_absolute){
+    instruction |= 3 << 27;
+  } else if (rb != -1) {
+    instruction |= 4 << 27;
+  } else {
+    instruction |= 5 << 27;
+  }
+
+  if (is_load){
+    if (rb != -1) instruction |= 1 << 16;
+    else instruction |= 1 << 21;
+  }
+
+  instruction |= ra << 22;
+  
+  if (is_absolute){
+    instruction |= (y << 14);
+    instruction |= rb << 17;
+    assert(encoding == (encoding & 0x3FFF)); // ensure encoding is 14 bits
+  } else if (rb != -1) {
+    assert(encoding == (encoding & 0xFFFF)); // ensure encoding is 16 bits
+    instruction |= rb << 17;
+  } else {
+    assert(encoding == (encoding & 0x1FFFFF)); // ensure encoding is 21 bits
+  }
+
   instruction |= encoding;
 
   return instruction;
 }
 
 int encode_branch_immediate(long imm, bool* success){
-  if (-(1 << 23) <= imm && imm < (1 << 23) && ((imm & 0x3) == 0)){
+  if (-(1 << 21) <= imm && imm < (1 << 21)){
     return imm;
   } else {
     *success = false;
     print_error();
-    fprintf(stderr, "branch immediate must be in range -8388608 to 8388607, and be divisible by 4\n");
+    fprintf(stderr, "branch immediate must be in range -2097152 to 2097151\n");
     fprintf(stderr, "Got %ld\n", imm);
     return 0;
   }
@@ -676,7 +739,8 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
   if (ra == -1){
     // it's an immediate branch
     enum ConsumeResult result;
-    int imm = consume_immediate(&result);
+    int imm = consume_label_imm(&result) / 4; // don't encode bottom two bits of pc
+    if (result != FOUND) imm = consume_literal(&result);
     if (result != FOUND){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
@@ -690,7 +754,7 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
       return 0;
     }
     int encoding = encode_branch_immediate(imm, success);
-    instruction |= 5 << 27; // opcode
+    instruction |= 6 << 27; // opcode
     instruction |= branch_code <<22;
     instruction |= encoding;
   } else {
@@ -701,8 +765,8 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
       rb = ra;
       ra = 0;
     }
-    if (is_absolute) instruction |= 6 << 27;
-    else instruction |= 7 << 27;
+    if (is_absolute) instruction |= 7 << 27;
+    else instruction |= 8 << 27;
     instruction |= branch_code << 22;
     instruction |= ra << 5;
     instruction |= rb;
@@ -713,7 +777,7 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
 
 int consume_syscall(bool* success){
   if (consume("EXIT")){
-    int instruction = (8 << 27);
+    int instruction = (9 << 27);
 
     return instruction;
   } else {
@@ -805,9 +869,10 @@ int consume_crmv(bool* success){
         return 0; 
       }
       // crmv crA, rB
+      instruction |= 4 << 10;
     } else {
       // crmv crA, crB
-      instruction |= 1 << 10;
+      instruction |= 6 << 10;
     }
   } else {
     rb = consume_control_register();
@@ -818,7 +883,7 @@ int consume_crmv(bool* success){
       return 0; 
     }
     // crmv rA, crB
-    instruction |= 2 << 10;
+    instruction |= 5 << 10;
   }
   instruction |= ra << 22;
   instruction |= rb << 17;
@@ -895,9 +960,10 @@ int consume_mov_hack(int mov_type, bool* success){
   // [0] movu := lui rA, (imm & 0xFFFFFC00)
   // [1] movl := addi rA, rA, (imm & 0x3FF)
   // [2] movu8 := lui rA, ((imm - 8) & 0xFFFFFC00)
-  // [3] movl8 := addi rA, rA, ((imm - 8) & 0x3FF)
+  // [3] movl4 := addi rA, rA, ((imm - 4) & 0x3FF)
 
-  if (mov_type & 2) imm -= 8;
+  if (mov_type == 2) imm -= 8;
+  else if (mov_type == 3) imm -= 4;
   
   int instruction = 0;
 
@@ -920,7 +986,7 @@ int consume_mov_hack(int mov_type, bool* success){
 
     assert(encoding == (encoding & 0x3FFFFF)); // ensure immediate fits in 22 bits
 
-    int instruction = 2 << 27; // opcode for lui
+    instruction = 2 << 27; // opcode for lui
     instruction |= ra << 22;
     instruction |= encoding;
   }
@@ -955,10 +1021,10 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
   else if (consume_keyword("mul")) instruction = consume_alu_op(18, &success);
   else if (consume_keyword("lui")) instruction = consume_lui(&success);
-  else if (consume_keyword("sw")) instruction = consume_mem(true, false, &success);
-  else if (consume_keyword("lw")) instruction = consume_mem(true, true, &success);
-  else if (consume_keyword("swr")) instruction = consume_mem(false, false, &success);
-  else if (consume_keyword("lwr")) instruction = consume_mem(false, true, &success);
+  else if (consume_keyword("swa")) instruction = consume_mem(true, false, &success);
+  else if (consume_keyword("lwa")) instruction = consume_mem(true, true, &success);
+  else if (consume_keyword("sw")) instruction = consume_mem(false, false, &success);
+  else if (consume_keyword("lw")) instruction = consume_mem(false, true, &success);
   else if (consume_keyword("br")) instruction = consume_branch(0, false, &success);
   else if (consume_keyword("bz")) instruction = consume_branch(1, false, &success);
   else if (consume_keyword("bnz")) instruction = consume_branch(2, false, &success);
@@ -1011,7 +1077,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
   else if (consume_keyword("movl")) instruction = consume_mov_hack(1, &success);
   else if (consume_keyword("movu8")) instruction = consume_mov_hack(2, &success);
-  else if (consume_keyword("movl8")) instruction = consume_mov_hack(3, &success);
+  else if (consume_keyword("movl4")) instruction = consume_mov_hack(3, &success);
 
   else *result = NOT_FOUND;
   
@@ -1070,7 +1136,6 @@ bool process_labels(char const* const prog){
         is_kernel = true;
         continue;
       } else if (consume_keyword(".global")) {
-        
         struct Slice* label = consume_identifier();
         bool label_used = false;
         if (label != NULL){
@@ -1130,7 +1195,7 @@ bool process_labels(char const* const prog){
           if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
           return false;
         }
-        pc++;
+        pc += 4;
         continue;
       }
       else if (consume_keyword(".space")) { 
@@ -1141,14 +1206,18 @@ bool process_labels(char const* const prog){
           if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
           return false;
         }
-        pc += imm;
+        pc += imm * 4;
         continue;
       }
       
-      enum ConsumeResult result;
+      enum ConsumeResult result = FOUND;
       consume_instruction(&result);
-      pc++;
-      if (result == ERROR) return false;
+      pc += 4;
+      if (result != FOUND) {
+        print_error();
+        fprintf(stderr, "Unrecognized instruction\n");
+        return false;
+      }
     }
   }
   return true;
@@ -1162,7 +1231,6 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
   enum ConsumeResult success = FOUND;
 
   while (success == FOUND){
-
     // consume any labels, they were already dealt with
     while (skip_newline(), skip_label());
     skip_newline();
@@ -1202,7 +1270,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         fprintf(stderr, ".origin address must be a 32 bit integer\n");
         return false;
       } else {
-        for (int i = 0; i < imm - pc; ++i) 
+        for (int i = 0; i < imm - pc; i += 4) 
           instruction_array_append(instructions, 0);
       }
       pc = imm;
@@ -1222,7 +1290,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
         return false;
       }
-      pc++;
+      pc += 4;
     }
     else if (consume_keyword(".space")) { 
       enum ConsumeResult result; 
@@ -1240,12 +1308,12 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
         return false;
       }
-      pc += imm;
+      pc += imm * 4;
     } else {
       int instruction = consume_instruction(&success);
       if (success == FOUND) instruction_array_append(instructions, instruction);
       else if (success == ERROR) return false;
-      pc++;
+      pc += 4;
     }
   }
 
@@ -1281,6 +1349,8 @@ struct InstructionArray* assemble(int num_files, int* file_names,
       return NULL;
     }
   }
+
+  pass_number = 2;
 
   struct InstructionArray* instructions = create_instruction_array(1000);
 

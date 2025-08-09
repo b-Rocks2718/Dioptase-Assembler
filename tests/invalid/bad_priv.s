@@ -1,1 +1,2 @@
+_start:
   mode halt

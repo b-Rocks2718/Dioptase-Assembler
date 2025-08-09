@@ -1,3 +1,4 @@
+_start:
 qwgxyfuwnfxguiwnfi
 uiwfe
 

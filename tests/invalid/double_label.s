@@ -1,3 +1,4 @@
+_start:
 func:
   nop
   call func

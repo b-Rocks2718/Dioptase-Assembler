@@ -1,3 +1,4 @@
+_start:
   nop
   nop
   nop

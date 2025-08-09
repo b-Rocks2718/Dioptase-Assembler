@@ -50,7 +50,7 @@ void expand_nop(void){
 }
 
 void expand_ret(void){
-  #define RET_EXPANSION "bl  r0, r31"
+  #define RET_EXPANSION "br  r0, r31"
 
   size_t expansion_len = strlen(RET_EXPANSION) + 1; // account for null
   while (result_index + expansion_len >= capacity - 2) expand_capacity();
@@ -202,11 +202,11 @@ void expand_mov(bool* success){
 void expand_call(bool* success){
   // immediates can be numbers or labels
 
-  #define CALL_EXPANSION_LIT "movu8 r31, 0x%X; movl8 r31, 0x%X; bl r31, r31"
+  #define CALL_EXPANSION_LIT "movu8 r31, 0x%X; movl4 r31, 0x%X; br r31, r31"
 
   #define CALL_EXPANSION_LBL_1 "movu8 r31, "
-  #define CALL_EXPANSION_LBL_2 "; movl8 r31, "
-  #define CALL_EXPANSION_LBL_3 "; bl r31, r31"
+  #define CALL_EXPANSION_LBL_2 "; movl4 r31, "
+  #define CALL_EXPANSION_LBL_3 "; br r31, r31"
 
   enum ConsumeResult c_result;
   long imm = consume_literal(&c_result);
@@ -282,6 +282,12 @@ char** preprocess(int num_files, int* file_names,
     // used when printing errors
     result[result_index] = '\0';
     result_index++; 
+
+    // add a jump to _start
+    if (i == 0){
+      result_index += sprintf(result + result_index, 
+        "movu8 r31, _start; movl4 r31, _start; br r31, r31");
+    }
 
     while (*current != '\0'){
       // expand dynamic array if necessary, exit if realloc fails 

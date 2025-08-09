@@ -1,5 +1,7 @@
 # TODO: make this .ok file
 .kernel
+
+_start:
   nop
   push r2
   pop r2

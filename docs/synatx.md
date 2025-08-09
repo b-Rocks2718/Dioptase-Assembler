@@ -35,6 +35,9 @@ Valid control registers:
 `efg` (exceptional flags) is an alias for `cr5`  
 `cdv` (clock divider) is an alias for `cr6`  
 
+You can pass any nonzero number of .s files into the assembler and it will produce a single `.hex` file.
+Whenever the assembler is called, exactly one of the files passed in must contain a `_start` label.
+
 ### RRR Instructions
 
 Instructions that take two register operands have have one register target  
@@ -53,19 +56,20 @@ Note that the immediates that are possible to be encoded varies per instruction.
 
 #### Memory Instructions
 
-Memory instructions are special because they are RRI instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets. For `sw` and `lw`, labels cannot be used as the immediate (use pc-relative addressing to access labels).  
+Memory instructions are special because they are RRI instructions that have the option to do a preincrement or postincrement. In addition, when a register is used as an address, it must be enclosed in square brackets. For `swa` and `lwa` (abosulte addressing), labels cannot be used as the immediate (use pc-relative addressing to access labels).  
 
 Examples:  
-`lw r1, [r2]` no offset  
-`lw r1, [r2, imm]` signed offset  
-`lw r1, [r2, imm]!` preincrement  
-`lw r1, [r2], imm` postincrement  
+`lwa r1, [r2]` no offset  
+`lwa r1, [r2, imm]` signed offset  
+`lwa r1, [r2, imm]!` preincrement  
+`lwa r1, [r2], imm` postincrement  
 
-The syntax for `sw` is analagous. 
+The syntax for `swa` is analagous. 
 
-For `swr` and `lwr`, the only offset type allowed is signed immediate. The register address can be optionally ommitted, and `r0` will be used.
+`sw` and `lw` do pc-relative addressing.
+For `sw` and `lw`, the only offset type allowed is signed immediate. The register address can be ommitted, and a different encoding will be used.
 
-Example: `swr r1, [r0, label]` and `swr r1, [label]` are equivalent.
+Example: `swr r1, [label]` and `swr r1, [r0, label]` are usually equivalent, but the former allows for `label` to be further away than the latter.  
 
 ### RI Instructions
 

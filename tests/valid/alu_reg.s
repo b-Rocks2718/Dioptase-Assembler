@@ -1,5 +1,6 @@
     # test different registers
     # test all opcodes
+_start:
     and  r0, r1, r2
     nand r3, r4, r5
     or   r6, r7, r8

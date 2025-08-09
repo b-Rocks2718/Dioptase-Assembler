@@ -1,1 +1,2 @@
+_start:
     sys EXIT
