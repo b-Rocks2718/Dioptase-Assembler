@@ -6,7 +6,7 @@ See [ISA](https://github.com/b-Rocks2718/Dioptase/blob/main/docs/ISA.md) for the
 
 ## Usage
 
-Build the assembler with `make assembler`
+Build the assembler with `make all`
 
 Run it with `./build/assembler <flags> <source files>`
 
