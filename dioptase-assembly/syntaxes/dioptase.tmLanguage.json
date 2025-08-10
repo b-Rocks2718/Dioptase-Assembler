@@ -1,0 +1,112 @@
+{
+  "scopeName": "source.dioptase",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#label-def" },
+    { "include": "#directives" },
+    { "include": "#instructions" },
+    { "include": "#macros" },
+    { "include": "#registers" },
+    { "include": "#syscalls" },
+    { "include": "#modes" },
+    { "include": "#numbers" },
+    { "include": "#memory" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.dioptase",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "label-def": {
+      "patterns": [
+        {
+          "name": "entity.name.label.dioptase",
+          "match": "^[A-Za-z_][A-Za-z0-9_.]*:"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "keyword.directive.dioptase",
+          "match": "\\.(?:global|kernel|origin|fill|space)\\b"
+        }
+      ]
+    },
+    "instructions": {
+      "patterns": [
+        {
+          "name": "keyword.instruction.dioptase",
+          "match": "\\b(?:and|nand|or|nor|xor|xnor|not|lsl|lsr|asr|rotl|rotr|lslc|lsrc|add|addc|sub|subb|mul|sw|lw|swa|lwa|br|bz|bnz|bs|bns|bc|bnc|bo|bno|bps|bnps|bg|bge|bl|ble|ba|bae|bb|bbe|jmp|bra|bza|bnza|bsa|bnsa|bca|bnca|boa|bnoa|bpa|bnpa|bga|bgea|bla|blea|baa|baea|bba|bbea|lui|sys|crmv|tlbr|tlbw|tlbc|mode|rfe|nop|mov|ret|jmp)\\b"
+        }
+      ]
+    },
+    "macros": {
+      "patterns": [
+        {
+          "name": "support.function.macro.dioptase",
+          "match": "\\b(?:push|pop|movi|call)\\b"
+        }
+      ]
+    },
+    
+    "registers": {
+      "patterns": [
+        {
+          "name": "variable.register.dioptase",
+          "match": "\\b(?:r(?:[0-9]|[12][0-9]|3[01])|sp|bp|ra|cr[0-6]|psr|pid|isr|imr|epc|efg|cdv)\\b"
+        }
+      ]
+    },
+    "syscalls": {
+      "patterns": [
+        {
+          "name": "keyword.syscall.dioptase",
+          "match": "\\bEXIT\\b"
+        }
+      ]
+    },
+    "modes": {
+      "patterns": [
+        {
+          "name": "keyword.mode.dioptase",
+          "match": "\\b(?:run|sleep|halt)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.binary.dioptase",
+          "match": "-?0[bB][01]+"
+        },
+        {
+          "name": "constant.numeric.octal.dioptase",
+          "match": "-?0[oO][0-7]+"
+        },
+        {
+          "name": "constant.numeric.hex.dioptase",
+          "match": "-?0[xX][0-9A-Fa-f]+"
+        },
+        {
+          "name": "constant.numeric.decimal.dioptase",
+          "match": "-?(?:[1-9][0-9]*|0)"
+        }
+      ]
+    },
+    "memory": {
+      "patterns": [
+        {
+          "name": "meta.brackets.memory.dioptase",
+          "match": "\\[.*?\\]!?|\\],"
+        }
+      ]
+    }
+  },
+  "fileTypes": ["s", "asm"],
+  "name": "Dioptase Assembly"
+}

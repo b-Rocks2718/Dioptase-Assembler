@@ -19,8 +19,8 @@ _start:
     bnc 0
     bo 0
     bno 0
-    bp 0
-    bnp 0
+    bps 0
+    bnps 0
     bg 0
     bge 0
     bl 0
@@ -70,8 +70,8 @@ _start:
     bnc r0
     bo r0
     bno r0
-    bp r0
-    bnp r0
+    bps r0
+    bnps r0
     bg r0
     bge r0
     bl r0

@@ -1069,8 +1069,8 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("bnc")) instruction = consume_branch(6, false, &success);
   else if (consume_keyword("bo")) instruction = consume_branch(7, false, &success);
   else if (consume_keyword("bno")) instruction = consume_branch(8, false, &success);
-  else if (consume_keyword("bp")) instruction = consume_branch(9, false, &success);
-  else if (consume_keyword("bnp")) instruction = consume_branch(10, false, &success);
+  else if (consume_keyword("bps")) instruction = consume_branch(9, false, &success);
+  else if (consume_keyword("bnps")) instruction = consume_branch(10, false, &success);
   else if (consume_keyword("bg")) instruction = consume_branch(11, false, &success);
   else if (consume_keyword("bge")) instruction = consume_branch(12, false, &success);
   else if (consume_keyword("bl")) instruction = consume_branch(13, false, &success);

@@ -14,9 +14,19 @@ Remove all generated files but the final executable with `make clean`
 
 Remove everything with `make purge`
 
-#### Supported Flags:  
+#### Supported Flags 
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
 `-o` to name the output file (./a.hex is the default)
+
+## Syntax Highlighting
+
+cd into the `dioptase-assembly` directory and run
+
+```bash
+code --install-extension dioptase-assembly-0.0.1.vsix
+```
+
+for VSCode syntax highlighting
 
 ## Extending the assembler
 
