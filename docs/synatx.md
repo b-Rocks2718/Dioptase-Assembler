@@ -115,7 +115,11 @@ bl  r31, r31
 ```
 Do a -8 because we want the offset from the bl instruction, not the movi
 
-`ret` - Alias for  `bl r0, r31`
+`ret` - Alias for  `jmp r31`
+
+`jmp rA` - Alias for  `bra rA`
+
+`jmp imm` - Alias for  `br imm`
 
 ## Directives
 

@@ -1,2 +1,6 @@
 build
 *.hex
+*.gcno 
+*.gcda 
+*.gcov
+coverage.info

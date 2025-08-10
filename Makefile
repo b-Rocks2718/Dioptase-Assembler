@@ -69,7 +69,7 @@ test: dirs $(EXEC)
 	YELLOW="\033[0;33m"; \
 	NC="\033[0m"; \
 	passed=0; total=$$(( $(words $(VALID_TESTS)) + $(words $(INVALID_TESTS)) + 2)); \
-	echo "Running $(words $(VALID_TESTS)) valid tests:"; \
+	echo "Running $(words $(VALID_TESTS) x) valid tests:"; \
 	for t in $(VALID_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
 	  if timeout 1s $(EXEC) tests/valid/$$t.s -o tests/valid/$$t.hex >/dev/null 2>&1; then \
@@ -100,7 +100,7 @@ test: dirs $(EXEC)
 	    echo "$$RED FAIL $$NC"; \
 	  fi; \
 	fi;\
-	echo "\nRunning $(words $(INVALID_TESTS)) invalid tests:"; \
+	echo "\nRunning $(words $(INVALID_TESTS) x) invalid tests:"; \
 	for t in $(INVALID_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
 	  if timeout 1s $(EXEC) tests/invalid/$$t.s -o tests/invalid/$$t.hex >/dev/null 2>&1; then \
@@ -130,6 +130,17 @@ test: dirs $(EXEC)
 	echo; \
 	echo "Summary: $$passed / $$total tests passed.";
 
+.PHONY: coverage
+coverage: clean
+	@echo "Rebuilding with coverage flags..."
+	$(MAKE) CFLAGS="$(CFLAGS) -fprofile-arcs -ftest-coverage" \
+	        LDFLAGS="-fprofile-arcs -ftest-coverage"
+	@echo "Running tests..."
+	$(MAKE) test
+	@echo "Generating coverage report..."
+	@gcov -o $(BUILD_DIR) $(SRCS)
+
+
 # Ensure build directory exists
 dirs:
 	@mkdir -p $(BUILD_DIR) $(BIN_DIR)
@@ -142,6 +153,8 @@ clean:
 	rm -f tests/invalid/*.hex
 	rm -f tests/valid/lib/*.hex
 	rm -f tests/invalid/lib/*.hex
+	rm -f *.gcno *.gcda *.gcov
+	rm -f coverage.info
 	rm -f a.hex
 
 # Remove everything

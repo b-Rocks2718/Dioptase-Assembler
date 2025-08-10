@@ -1,4 +1,14 @@
     # TODO: test all privileged instructions
     .kernel
 _start:
-    add r1, r1, 11
+    tlbr r1, r2
+    tlbw r1, r2
+    tlbc
+
+    # crmv is tested by macros so we skip that
+
+    mode run
+    mode sleep
+    mode halt
+
+    rfe r31

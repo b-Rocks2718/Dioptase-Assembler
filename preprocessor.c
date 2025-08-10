@@ -42,7 +42,7 @@ bool skip_comments(void){
 }
 
 void expand_nop(void){
-  #define NOP_EXPANSION "and r0, r0, r0"
+  #define NOP_EXPANSION "and  r0, r0, r0"
 
   size_t expansion_len = strlen(NOP_EXPANSION) + 1; // account for null
   while (result_index + expansion_len >= capacity - 2) expand_capacity();
@@ -50,7 +50,7 @@ void expand_nop(void){
 }
 
 void expand_ret(void){
-  #define RET_EXPANSION "br  r0, r31"
+  #define RET_EXPANSION "jmp  r31"
 
   size_t expansion_len = strlen(RET_EXPANSION) + 1; // account for null
   while (result_index + expansion_len >= capacity - 2) expand_capacity();
@@ -58,7 +58,7 @@ void expand_ret(void){
 }
 
 void expand_push(bool* success){
-  #define PUSH_EXPANSION "sw  r%d [sp, -4]!"
+  #define PUSH_EXPANSION "swa  r%d [sp, -4]!"
 
   int ra = consume_register();
   if (ra == -1){
@@ -75,7 +75,7 @@ void expand_push(bool* success){
 }
 
 void expand_pop(bool* success){
-  #define POP_EXPANSION "lw  r%d, [sp], 4"
+  #define POP_EXPANSION "lwa  r%d, [sp], 4"
 
   int ra = consume_register();
   if (ra == -1){
@@ -140,7 +140,7 @@ void expand_movi(bool* success){
 }
 
 void expand_mov(bool* success){
-  #define MOV_EXPANSION_USR "add r%d, r%d, r0"
+  #define MOV_EXPANSION_USR "add  r%d, r%d, r0"
   #define MOV_EXPANSION_CR_1 "crmv r%d, cr%d"
   #define MOV_EXPANSION_CR_2 "crmv cr%d, r%d"
   #define MOV_EXPANSION_CR_3 "crmv cr%d, cr%d"
@@ -202,10 +202,10 @@ void expand_mov(bool* success){
 void expand_call(bool* success){
   // immediates can be numbers or labels
 
-  #define CALL_EXPANSION_LIT "movu8 r31, 0x%X; movl4 r31, 0x%X; br r31, r31"
+  #define CALL_EXPANSION_LIT "movu r31, 0x%X; movl r31, 0x%X; br r31, r31"
 
-  #define CALL_EXPANSION_LBL_1 "movu8 r31, "
-  #define CALL_EXPANSION_LBL_2 "; movl4 r31, "
+  #define CALL_EXPANSION_LBL_1 "movu r31, "
+  #define CALL_EXPANSION_LBL_2 "; movl r31, "
   #define CALL_EXPANSION_LBL_3 "; br r31, r31"
 
   enum ConsumeResult c_result;
@@ -286,7 +286,7 @@ char** preprocess(int num_files, int* file_names,
     // add a jump to _start
     if (i == 0){
       result_index += sprintf(result + result_index, 
-        "movu8 r31, _start; movl4 r31, _start; br r31, r31");
+        "  movu r31, _start; movl r31, _start; br r31, r31");
     }
 
     while (*current != '\0'){

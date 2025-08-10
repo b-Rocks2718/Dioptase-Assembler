@@ -628,11 +628,11 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
   }
 
   long imm;
-  int y;
+  int y = 0;
 
   if (consume("]") && is_absolute){
     enum ConsumeResult result;
-    imm = consume_immediate(&result);
+    imm = consume_literal(&result);
     if (result == FOUND){
       // postincrement
       if (!is_absolute){
@@ -648,6 +648,7 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
       y = 0;
     } else {
       // error
+      *success = false;
       return 0;
     }
   } else {
@@ -703,7 +704,7 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
   instruction |= ra << 22;
   
   if (is_absolute){
-    instruction |= (y << 14);
+    instruction |= y << 14;
     instruction |= rb << 17;
     assert(encoding == (encoding & 0x3FFF)); // ensure encoding is 14 bits
   } else if (rb != -1) {
@@ -720,7 +721,7 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
 
 int encode_branch_immediate(long imm, bool* success){
   if (-(1 << 21) <= imm && imm < (1 << 21)){
-    return imm;
+    return imm & 0x3FFFFF;
   } else {
     *success = false;
     print_error();
@@ -770,6 +771,35 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
     instruction |= branch_code << 22;
     instruction |= ra << 5;
     instruction |= rb;
+  }
+
+  return instruction;
+}
+
+// Alias for unconditional branches
+int consume_jmp(bool* success){
+  int instruction = 0;
+
+  int ra = consume_register();
+  if (ra == -1){
+    // it's an immediate branch
+    enum ConsumeResult result;
+    int imm = consume_label_imm(&result) / 4; // don't encode bottom two bits of pc
+    if (result != FOUND) imm = consume_literal(&result);
+    if (result != FOUND){
+      print_error();
+      if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
+      *success = false;
+      return 0;
+    }
+    
+    int encoding = encode_branch_immediate(imm, success);
+    instruction |= 6 << 27; // opcode
+    instruction |= encoding;
+  } else {
+    // register branch
+    instruction |= 7 << 27;
+    instruction |= ra;
   }
 
   return instruction;
@@ -900,9 +930,9 @@ int consume_mode_op(bool* success){
 
   if (consume("run"));
   else if (consume("sleep")){
-    instruction |= 1 << 8;
+    instruction |= 1 << 10;
   } else if (consume("halt")){
-    instruction |= 2 << 8;
+    instruction |= 2 << 10;
   } else {
     print_error();
     fprintf(stderr, "Invalid mode\n");
@@ -949,13 +979,18 @@ int consume_mov_hack(int mov_type, bool* success){
   }
 
   enum ConsumeResult result;
-  long imm = consume_immediate(&result);
+  int imm = consume_label_imm(&result); // don't encode bottom two bits of pc
+  if (result == FOUND) mov_type |= 2;
+  else imm = consume_literal(&result);
   if (result != FOUND){
     print_error();
-    if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+    if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
     *success = false;
     return 0;
   }
+
+  // movu8 and movl4 are used when the immediate is a label
+  // normal movu and movl used otherwise
 
   // [0] movu := lui rA, (imm & 0xFFFFFC00)
   // [1] movl := addi rA, rA, (imm & 0x3FF)
@@ -1063,6 +1098,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("baea")) instruction = consume_branch(16, true, &success);
   else if (consume_keyword("bba")) instruction = consume_branch(17, true, &success);
   else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
+  else if (consume_keyword("jmp")) instruction = consume_jmp(&success);
   else if (consume_keyword("sys")) instruction = consume_syscall(&success);
 
   // privileged instructions
@@ -1076,8 +1112,6 @@ int consume_instruction(enum ConsumeResult* result){
   // hacks to make movi and call work
   else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
   else if (consume_keyword("movl")) instruction = consume_mov_hack(1, &success);
-  else if (consume_keyword("movu8")) instruction = consume_mov_hack(2, &success);
-  else if (consume_keyword("movl4")) instruction = consume_mov_hack(3, &success);
 
   else *result = NOT_FOUND;
   
