@@ -565,15 +565,14 @@ int encode_absolute_memory_immediate(long imm, bool* success){
 
 int encode_relative_memory_immediate(long imm, bool* success){
   // top n bits must all be 0s or all be 1s
-  // bottom 2 bits must be 0s
-  // the 16 bits in the middle become part of the instruction
-  if ((imm == (imm & 0x3FFFF) || ~imm == (~imm & 0x3FFFF)) && ((imm & 3) == 0)){
-    return (imm >> 2) & 0xFFFF;
+  // the bottom 16 bits become part of the instruction
+  if (imm == (imm & 0xFFFF) || ~imm == (~imm & 0xFFFF)){
+    return imm & 0xFFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must be a 18 bit number that's divisible by 4\n");
+    fprintf(stderr, "Immediate must fit in 16 bits\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
@@ -582,22 +581,21 @@ int encode_relative_memory_immediate(long imm, bool* success){
 
 int encode_long_relative_memory_immediate(long imm, bool* success){
   // top n bits must all be 0s or all be 1s
-  // bottom 2 bits must be 0s
-  // the 21 bits in the middle become part of the instruction
-  if ((imm == (imm & 0x7FFFFF) || ~imm == (~imm & 0x7FFFFF)) && ((imm & 3) == 0)){
-    return (imm >> 2) & 0x1FFFFF;
+  // the bottom 21 bits become part of the instruction
+  if (imm == (imm & 0x1FFFFF) || ~imm == (~imm & 0x1FFFFF)){
+    return imm & 0x1FFFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must be a 23 bit number that's divisible by 4\n");
+    fprintf(stderr, "Immediate must fit in 21 bits\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
   }
 }
 
-int consume_mem(bool is_absolute, bool is_load, bool* success){
+int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
   int instruction = 0;
 
   int ra = consume_register();
@@ -688,12 +686,13 @@ int consume_mem(bool is_absolute, bool is_load, bool* success){
   else if (rb != -1) encoding = encode_relative_memory_immediate(imm, success);
   else encoding = encode_long_relative_memory_immediate(imm, success);
 
+  // opcode
   if (is_absolute){
-    instruction |= 3 << 27;
+    instruction |= (3 + 3 * width_type) << 27;
   } else if (rb != -1) {
-    instruction |= 4 << 27;
+    instruction |= (4 + 3 * width_type) << 27;
   } else {
-    instruction |= 5 << 27;
+    instruction |= (5 + 3 * width_type) << 27;
   }
 
   if (is_load){
@@ -740,8 +739,7 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
   if (ra == -1){
     // it's an immediate branch
     enum ConsumeResult result;
-    int imm = consume_label_imm(&result) / 4; // don't encode bottom two bits of pc
-    if (result != FOUND) imm = consume_literal(&result);
+    int imm = consume_immediate(&result);
     if (result != FOUND){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
@@ -755,8 +753,8 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
       return 0;
     }
     int encoding = encode_branch_immediate(imm, success);
-    instruction |= 6 << 27; // opcode
-    instruction |= branch_code <<22;
+    instruction |= 12 << 27; // opcode
+    instruction |= branch_code << 22;
     instruction |= encoding;
   } else {
     // register branch
@@ -766,8 +764,8 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
       rb = ra;
       ra = 0;
     }
-    if (is_absolute) instruction |= 7 << 27;
-    else instruction |= 8 << 27;
+    if (is_absolute) instruction |= 13 << 27; // opcode
+    else instruction |= 14 << 27; // opcode
     instruction |= branch_code << 22;
     instruction |= ra << 5;
     instruction |= rb;
@@ -784,8 +782,7 @@ int consume_jmp(bool* success){
   if (ra == -1){
     // it's an immediate branch
     enum ConsumeResult result;
-    int imm = consume_label_imm(&result) / 4; // don't encode bottom two bits of pc
-    if (result != FOUND) imm = consume_literal(&result);
+    int imm = consume_immediate(&result);
     if (result != FOUND){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
@@ -794,11 +791,11 @@ int consume_jmp(bool* success){
     }
     
     int encoding = encode_branch_immediate(imm, success);
-    instruction |= 6 << 27; // opcode
+    instruction |= 12 << 27; // opcode
     instruction |= encoding;
   } else {
     // register branch
-    instruction |= 7 << 27;
+    instruction |= 13 << 27; // opcode
     instruction |= ra;
   }
 
@@ -807,7 +804,7 @@ int consume_jmp(bool* success){
 
 int consume_syscall(bool* success){
   if (consume("EXIT")){
-    int instruction = (9 << 27);
+    int instruction = 15 << 27;
 
     return instruction;
   } else {
@@ -1056,10 +1053,18 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
   else if (consume_keyword("mul")) instruction = consume_alu_op(18, &success);
   else if (consume_keyword("lui")) instruction = consume_lui(&success);
-  else if (consume_keyword("swa")) instruction = consume_mem(true, false, &success);
-  else if (consume_keyword("lwa")) instruction = consume_mem(true, true, &success);
-  else if (consume_keyword("sw")) instruction = consume_mem(false, false, &success);
-  else if (consume_keyword("lw")) instruction = consume_mem(false, true, &success);
+  else if (consume_keyword("swa")) instruction = consume_mem(0, true, false, &success);
+  else if (consume_keyword("lwa")) instruction = consume_mem(0, true, true, &success);
+  else if (consume_keyword("sw")) instruction = consume_mem(0, false, false, &success);
+  else if (consume_keyword("lw")) instruction = consume_mem(0, false, true, &success);
+  else if (consume_keyword("sda")) instruction = consume_mem(1, true, false, &success);
+  else if (consume_keyword("lda")) instruction = consume_mem(1, true, true, &success);
+  else if (consume_keyword("sd")) instruction = consume_mem(1, false, false, &success);
+  else if (consume_keyword("ld")) instruction = consume_mem(1, false, true, &success);
+  else if (consume_keyword("sba")) instruction = consume_mem(2, true, false, &success);
+  else if (consume_keyword("lba")) instruction = consume_mem(2, true, true, &success);
+  else if (consume_keyword("sb")) instruction = consume_mem(2, false, false, &success);
+  else if (consume_keyword("lb")) instruction = consume_mem(2, false, true, &success);
   else if (consume_keyword("br")) instruction = consume_branch(0, false, &success);
   else if (consume_keyword("bz")) instruction = consume_branch(1, false, &success);
   else if (consume_keyword("bnz")) instruction = consume_branch(2, false, &success);
