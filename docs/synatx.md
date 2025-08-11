@@ -50,7 +50,7 @@ Instructions that take a register and an immediate operand, and target a registe
 
 Syntax is `op rA, rB, imm`, with `rA` the target and `rB` and `imm` the operands. `imm` can be in base 2 (prefix with 0b), 8 (prefix with 0o), 10, or 16 (prefix with 0x), and can be prefixed with a minus to indicate it should be negated. The case of the b, o, or x does not matter. Base 10 immediates cannot begin with a 0. `imm` could also be a label, assuming that the label is defined somewhere in the file. The label will be converted to a pc-relative offset and an error will be raised if this value does not fit in the instruction encoding.
 
-Examples:  `addi r1, r0, 10`, `addi r1, r0, 0xA`, and `addi r1, r0, 0b1010` are all equivalent. Something like `addi r1, r0, -1` is also allowed, and so is `swr r1, [r2, data_0]`
+Examples:  `add r1, r0, 10`, `add r1, r0, 0xA`, and `add r1, r0, 0b1010` are all equivalent. Something like `add r1, r0, -1` is also allowed, and so is `sw r1, [r2, data_0]`
 
 Note that the immediates that are possible to be encoded varies per instruction. The assembler will throw an error if you give an instruction an immediate it cannot encode. See the [ISA](https://github.com/b-Rocks2718/Dioptase/blob/main/docs/ISA.md) for info on what immediates are supported for each instruction. 
 
@@ -120,6 +120,10 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 `jmp rA` - Alias for  `bra rA`
 
 `jmp imm` - Alias for  `br imm`
+
+`cmp rA, rB` - Alias for `sub r0, rA, rB`
+
+`cmp rA, i` - Alias for `sub r0, rA, i`
 
 ## Directives
 

@@ -20,3 +20,4 @@ _start:
     sub  r0, r0, r0
     subb r0, r0, r0
     mul  r0, r0, r0
+    cmp  r1, r2

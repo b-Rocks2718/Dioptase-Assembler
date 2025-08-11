@@ -500,6 +500,48 @@ int consume_alu_op(int alu_op, bool* success){
   return instruction; 
 }
 
+int consume_cmp(bool* success){
+  int rb = consume_register();
+  if (rb == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+  
+  int rc = consume_register();
+  int instruction = 0;
+  if (rc == -1){
+    // and ra, rb, imm
+    enum ConsumeResult result;
+    long imm = consume_immediate(&result);
+    if (result != FOUND){
+      print_error();
+      if (result == NOT_FOUND) fprintf(stderr, "Invalid register or immediate\n");
+      *success = false;
+      return 0;
+    }
+
+    instruction |= 1 << 27; // opcode is 1
+    instruction |= rb << 17;
+    instruction |= 16 << 12; // alu_op
+    
+    int encoding = encode_arithmetic_immediate(imm, success);
+
+    assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
+
+    instruction |= encoding;
+  } else {
+    // opcode is 0
+    instruction |= rb << 17;
+    instruction |= rc;
+    instruction |= 16 << 5; // alu_op
+  }
+  
+  return instruction; 
+}
+
 int encode_lui_immediate(long imm, bool* success){
   if ((imm & 0x3FF) == 0 && imm < ((long)1 << 32)){
     return ((int)imm >> 10) & 0x3FFFFF;
@@ -1052,6 +1094,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("sub")) instruction = consume_alu_op(16, &success);
   else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
   else if (consume_keyword("mul")) instruction = consume_alu_op(18, &success);
+  else if (consume_keyword("cmp")) instruction = consume_cmp(&success);
   else if (consume_keyword("lui")) instruction = consume_lui(&success);
   else if (consume_keyword("swa")) instruction = consume_mem(0, true, false, &success);
   else if (consume_keyword("lwa")) instruction = consume_mem(0, true, true, &success);

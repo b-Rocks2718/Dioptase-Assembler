@@ -41,3 +41,4 @@ loop:
     sub  r0, r0, 0
     subb r0, r0, 0
     mul  r0, r0, 0
+    cmp  r1, 13
