@@ -1307,7 +1307,7 @@ bool process_labels(char const* const prog){
 }
 
 // second pass, convert to binary
-bool to_binary(char const* const prog, struct InstructionArray* instructions){
+bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
   line_count = 1;
 
@@ -1353,8 +1353,8 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         fprintf(stderr, ".origin address must be a 32 bit integer\n");
         return false;
       } else {
-        for (int i = 0; i < imm - pc; i += 4) 
-          instruction_array_append(instructions, 0);
+        struct InstructionArray* arr = create_instruction_array(10, imm);
+        instruction_array_list_append(instructions, arr);
       }
       pc = imm;
     }
@@ -1367,7 +1367,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
         return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
-        instruction_array_append(instructions, imm);
+        instruction_array_append(instructions->tail, imm);
       } else {
         print_error();
         fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
@@ -1385,7 +1385,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
       }
       if (0 <= imm && imm < ((long)1 << 32)){
         for (int i = 0; i < imm; ++i) 
-          instruction_array_append(instructions, 0);
+          instruction_array_append(instructions->tail, 0);
       } else {
         print_error();
         fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
@@ -1394,7 +1394,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
       pc += imm * 4;
     } else {
       int instruction = consume_instruction(&success);
-      if (success == FOUND) instruction_array_append(instructions, instruction);
+      if (success == FOUND) instruction_array_append(instructions->tail, instruction);
       else if (success == ERROR) return false;
       pc += 4;
     }
@@ -1410,7 +1410,7 @@ bool to_binary(char const* const prog, struct InstructionArray* instructions){
 }
 
 // assemble an entire program
-struct InstructionArray* assemble(int num_files, int* file_names, 
+struct InstructionArrayList* assemble(int num_files, int* file_names, 
   const char *const *const argv, char** files){
 
   is_kernel = false;
@@ -1435,7 +1435,7 @@ struct InstructionArray* assemble(int num_files, int* file_names,
 
   pass_number = 2;
 
-  struct InstructionArray* instructions = create_instruction_array(1000);
+  struct InstructionArrayList* instructions = create_instruction_array_list();
 
   pc = 0;
   for (int i = 0; i < num_files; ++i){
@@ -1445,7 +1445,7 @@ struct InstructionArray* assemble(int num_files, int* file_names,
       for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
       free(local_labels);
       destroy_hash_map(global_labels);
-      destroy_instruction_array(instructions);
+      destroy_instruction_array_list(instructions);
       return NULL;
     }
   }

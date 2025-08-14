@@ -272,7 +272,7 @@ char** preprocess(int num_files, int* file_names,
     pc = 0;
     is_kernel = false;
     result_index = 0;
-    capacity = 50;
+    capacity = 60;
     current_file = argv[file_names[i]];
 
     result = malloc(sizeof(char) * capacity);

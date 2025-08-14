@@ -78,6 +78,8 @@ int main(int argc, const char *const *const argv){
         0);
     if (src == MAP_FAILED) {
       perror("mmap");
+      free(file_names);
+      free(files);
       exit(1);
     }
     files[i] = src;
@@ -100,7 +102,7 @@ int main(int argc, const char *const *const argv){
     return 0;
   }
 
-  struct InstructionArray* instructions = assemble(num_files, file_names, argv, preprocessed);
+  struct InstructionArrayList* instructions = assemble(num_files, file_names, argv, preprocessed);
   
   for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
   free(preprocessed);
@@ -117,10 +119,10 @@ int main(int argc, const char *const *const argv){
     exit(1);             
   }
 
-  fprint_instruction_array(fptr, instructions);
+  fprint_instruction_array_list(fptr, instructions);
 
   fclose(fptr);
-  destroy_instruction_array(instructions);
+  destroy_instruction_array_list(instructions);
 
   return 0;
 }
