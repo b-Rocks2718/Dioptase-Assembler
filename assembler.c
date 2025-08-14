@@ -254,7 +254,8 @@ long consume_literal(enum ConsumeResult* result) {
   // edge case for zero literal
   // (only time leading 0 is allowed)
   if (*current == '0' && 
-    (isspace(*(current + 1)) || *(current + 1) == '\0')){
+    (isspace(*(current + 1)) || *(current + 1) == '\0'
+      || *(current + 1) == ']')){
       *result = FOUND;
       current++;
       return 0;

@@ -16,6 +16,7 @@ _start:
     sw  r1, [r2, -4]    # signed offset
 
     sda  r1, [r2]
+    sda  r1, [r2, 0]
     ld  r1, [r2, 1]
 
     sb  r1, [r2, -4]
