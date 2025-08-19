@@ -1,4 +1,4 @@
-    # TODO: test all privileged instructions
+    # test all privileged instructions
     .kernel
 _start:
     tlbr r1, r2

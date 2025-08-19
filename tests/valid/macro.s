@@ -1,4 +1,4 @@
-# TODO: make this .ok file
+# make this .ok file
 .kernel
 
 _start:
