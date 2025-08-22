@@ -22,6 +22,7 @@ int main(int argc, const char *const *const argv){
 
   // look for flags
   bool pre_only = false;
+  bool has_start = true;
   for (int i = 1; i < argc; ++i){
     if (strcmp(argv[i], "-pre") == 0){
       pre_only = true;
@@ -34,6 +35,8 @@ int main(int argc, const char *const *const argv){
       }
       target_name = argv[i + 1];
       ++i;
+    } else if (strcmp(argv[i], "-nostart") == 0){
+      has_start = false;
     } else if (argv[i][0] == '-'){
       fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre or -o\n", argv[i]);
       free(file_names);
@@ -85,7 +88,7 @@ int main(int argc, const char *const *const argv){
     files[i] = src;
   }
 
-  char** preprocessed = preprocess(num_files, file_names, argv, files);
+  char** preprocessed = preprocess(num_files, file_names, has_start, argv, files);
   if (preprocessed == NULL) {
     free(file_names);
     free(files);

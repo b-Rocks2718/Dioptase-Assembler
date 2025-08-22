@@ -16,7 +16,8 @@ Remove everything with `make purge`
 
 #### Supported Flags 
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
-`-o` to name the output file (./a.hex is the default)
+`-o` to name the output file (./a.hex is the default)  
+`-nostart` if your program does not define a start label to jump to (execution will begin at address 0)  
 
 ## Syntax Highlighting
 

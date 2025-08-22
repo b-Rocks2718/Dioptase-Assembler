@@ -259,7 +259,7 @@ bool expand_macros(void){
 
 // copy the program into a new string, but without the comments
 // expand macros into real instructions
-char** preprocess(int num_files, int* file_names, 
+char** preprocess(int num_files, int* file_names, bool has_start,
   const char *const *const argv, const char * const * const files){
 
   char ** result_list = malloc(num_files * sizeof(char**));
@@ -284,7 +284,7 @@ char** preprocess(int num_files, int* file_names,
     result_index++; 
 
     // add a jump to _start
-    if (i == 0){
+    if (i == 0 && has_start){
       result_index += sprintf(result + result_index, 
         "  movu r31, _start; movl r31, _start; br r31, r31");
     }
