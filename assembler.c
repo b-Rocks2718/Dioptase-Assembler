@@ -668,29 +668,31 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
     }
   }
 
-  long imm;
+  long imm = 0;
   int y = 0;
 
-  if (consume("]") && is_absolute){
-    enum ConsumeResult result;
-    imm = consume_literal(&result);
-    if (result == FOUND){
-      // postincrement
-      if (!is_absolute){
-        print_error();
-        fprintf(stderr, "Postincrement addressing not allowed for relative addressing\n");
+  if (consume("]")){
+    if (is_absolute){
+      enum ConsumeResult result;
+      imm = consume_literal(&result);
+      if (result == FOUND){
+        // postincrement
+        if (!is_absolute){
+          print_error();
+          fprintf(stderr, "Postincrement addressing not allowed for relative addressing\n");
+          *success = false;
+          return 0;
+        }
+        y = 2;
+      } else if (result == NOT_FOUND){
+        // no offset
+        imm = 0;
+        y = 0;
+      } else {
+        // error
         *success = false;
         return 0;
       }
-      y = 2;
-    } else if (result == NOT_FOUND){
-      // no offset
-      imm = 0;
-      y = 0;
-    } else {
-      // error
-      *success = false;
-      return 0;
     }
   } else {
     enum ConsumeResult result;
