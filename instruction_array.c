@@ -87,7 +87,7 @@ void print_instruction_array(struct InstructionArray* arr){
 }
 
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr){
-  fprintf(ptr, "@%d\n", arr->origin);
+  fprintf(ptr, "@%X\n", arr->origin / 4);
   for (int i = 0; i < arr->size; ++i){
     fprintf(ptr, "%08X\n", arr->instructions[i]);
   }
