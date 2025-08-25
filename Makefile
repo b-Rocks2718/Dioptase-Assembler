@@ -1,4 +1,5 @@
 # Directories
+SRC_DIR 	:= src
 BUILD_DIR := build/objfiles
 BIN_DIR   := build
 
@@ -7,8 +8,8 @@ CC        := gcc
 CFLAGS    := -Wall -g
 
 # Sources and objects
-SRCS      := $(wildcard *.c)
-OBJFILES  := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRCS))
+SRCS      := $(wildcard $(SRC_DIR)/*.c)
+OBJFILES  := $(patsubst %.c,$(BUILD_DIR)/%.o, $(notdir $(SRCS)))
 EXEC      := $(BIN_DIR)/assembler
 
 TEST_OKS := $(wildcard tests/valid/*.ok)
@@ -28,7 +29,7 @@ $(EXEC): $(OBJFILES) | dirs
 	$(CC) $(CFLAGS) -o $@ $(OBJFILES)
 
 # Compile
-$(BUILD_DIR)/%.o: %.c | dirs
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # for each test/NAME.s, produce test/NAME.hex
