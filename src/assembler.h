@@ -47,9 +47,6 @@ struct Slice* consume_identifier(void);
 // label is an identifier followed by a colon
 struct Slice* consume_label(void);
 
-// label is an identifier followed by a colon
-bool skip_label(void);
-
 // attempt to consume a register
 int consume_register(void);
 

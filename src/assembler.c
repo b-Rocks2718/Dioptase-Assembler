@@ -4,12 +4,14 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <assert.h>
+#include <string.h>
 
 #include "slice.h"
 #include "assembler.h"
 #include "hashmap.h"
 #include "instruction_array.h"
 #include "preprocessor.h"
+#include "interrupts.h"
 
 /*
   Two-pass assembler.
@@ -170,11 +172,20 @@ struct Slice* consume_label(void){
 }
 
 // label is an identifier followed by a colon
-bool skip_label(void){
+bool skip_label(struct InstructionArrayList* instructions){
   skip();
   char const * old_current = current;
   struct Slice* label = consume_identifier();
   if (label != NULL && consume(":")) {
+    if (is_kernel){
+      // set up IVT
+      // yes this is spaghetti code
+      for (int i = 0; i < NUM_INTERRUPTS; ++i){
+        if (strncmp(label->start, interrupts[i].name, label->len) == 0){
+          instructions->head->instructions[interrupts[i].addr] = 1024 + hash_map_get(local_labels[current_file_index], label);
+        }
+      }
+    }
     free(label);
     return true;
   }
@@ -1318,7 +1329,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
 
   while (success == FOUND){
     // consume any labels, they were already dealt with
-    while (skip_newline(), skip_label());
+    while (skip_newline(), skip_label(instructions));
     skip_newline();
 
     if (pc > ((long)1 << 32)){
@@ -1439,6 +1450,13 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
   pass_number = 2;
 
   struct InstructionArrayList* instructions = create_instruction_array_list();
+
+  if (is_kernel){
+    // fill in IVT
+    for (int i = 0; i < 256; ++i){
+      instruction_array_append(instructions->tail, 0);
+    }
+  }
 
   pc = 0;
   for (int i = 0; i < num_files; ++i){

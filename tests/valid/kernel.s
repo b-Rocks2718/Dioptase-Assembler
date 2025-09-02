@@ -1,5 +1,6 @@
     # test all privileged instructions
     .kernel
+
 _start:
     tlbr r1, r2
     tlbw r1, r2
@@ -12,3 +13,10 @@ _start:
     mode halt
 
     rfe r31
+    sys EXIT
+
+EXIT:
+    mode halt
+
+INT_0:
+    mode sleep
