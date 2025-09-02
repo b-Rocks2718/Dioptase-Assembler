@@ -12,7 +12,7 @@ _start:
     mode sleep
     mode halt
 
-    rfe r31
+    rfe
     sys EXIT
 
 EXIT:

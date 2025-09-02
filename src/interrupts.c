@@ -2,10 +2,15 @@
 
 // needs to match the length of the array
 // there's probably a better way to do this
-int NUM_INTERRUPTS = 16;
+int NUM_INTERRUPTS = 21;
 
 struct InterruptEntry interrupts[] = {
   {"EXIT", 0},
+  {"EXC_INSTR", 0x80},
+  {"EXC_PRIV", 0x81},
+  {"TLB_UMISS", 0x82},
+  {"TLB_KMISS", 0x83},
+  {"EXC_ALIGN", 0x84},
   {"INT_0", 0xF0},
   {"INT_1", 0xF1},
   {"INT_2", 0xF2},
@@ -21,4 +26,5 @@ struct InterruptEntry interrupts[] = {
   {"INT_12", 0xFC},
   {"INT_13", 0xFD},
   {"INT_14", 0xFE},
+  {"INT_15", 0xFF},
 };
