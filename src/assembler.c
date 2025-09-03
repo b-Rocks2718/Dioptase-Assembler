@@ -1002,8 +1002,29 @@ int consume_rfe(bool* success){
   check_privileges(success);
   if (!success) return 0;
 
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  int rb = 0;
+  rb = consume_register();
+  if (rb == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
   int instruction = 31 << 27;
   instruction |= 3 << 12;
+  instruction |= ra << 22;
+  instruction |= rb << 17;
 
   return instruction;
 }

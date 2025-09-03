@@ -242,6 +242,49 @@ void expand_call(bool* success){
   }
 }
 
+void expand_rfei(bool* success){
+  // immediates can be numbers or labels
+
+  #define RFEI_EXPANSION_LIT "movu r30, 0x%X; movl r30, 0x%X; rfe r29, r30"
+
+  #define RFEI_EXPANSION_LBL_1 "movu r30, "
+  #define RFEI_EXPANSION_LBL_2 "; movl r30, "
+  #define RFEI_EXPANSION_LBL_3 "; rfe r29, r30"
+
+  enum ConsumeResult c_result;
+  long imm = consume_literal(&c_result);
+  if (c_result == FOUND){
+    // was a number
+    size_t expansion_len = strlen(RFEI_EXPANSION_LIT) + 20; // could be a big number
+    while (result_index + expansion_len >= capacity - 2) expand_capacity();
+    result_index += sprintf(result + result_index, RFEI_EXPANSION_LIT, (unsigned)imm, (unsigned)imm);
+  } else {
+    // check if its a string/label
+    struct Slice* label = consume_identifier();
+    if (label != NULL){
+
+      size_t expansion_len = strlen(RFEI_EXPANSION_LBL_1) + strlen(RFEI_EXPANSION_LBL_2) + 
+        strlen(RFEI_EXPANSION_LBL_3) + label->len + 2;
+      while (result_index + expansion_len >= capacity - 2) expand_capacity();
+      result_index += sprintf(result + result_index, RFEI_EXPANSION_LBL_1);
+      strncpy(result + result_index, label->start, label->len);
+      result_index += label->len;
+      result_index += sprintf(result + result_index, RFEI_EXPANSION_LBL_2);
+      strncpy(result + result_index, label->start, label->len);
+      result_index += label->len;
+      result_index += sprintf(result + result_index, RFEI_EXPANSION_LBL_3);
+
+      free(label);
+    } else {
+      // error
+      print_error();
+      fprintf(stderr, "Expected immediate\n");
+      *success = false;
+      return;
+    }
+  }
+}
+
 bool expand_macros(void){
   bool success = true;
   if (consume_keyword("nop")) expand_nop();
@@ -251,6 +294,7 @@ bool expand_macros(void){
   else if (consume_keyword("movi")) expand_movi(&success);
   else if (consume_keyword("mov")) expand_mov(&success);
   else if (consume_keyword("call")) expand_call(&success);
+  else if (consume_keyword("rfei")) expand_rfei(&success);
 
   if (!success) fprintf(stderr, "Preprocesser macro error\n");
 
