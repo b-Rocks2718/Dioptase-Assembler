@@ -221,7 +221,7 @@ void expand_call(bool* success){
     if (label != NULL){
 
       size_t expansion_len = strlen(CALL_EXPANSION_LBL_1) + strlen(CALL_EXPANSION_LBL_2) + 
-        strlen(CALL_EXPANSION_LBL_3) + label->len + 2;
+        strlen(CALL_EXPANSION_LBL_3) + label->len * 2 + 2;
       while (result_index + expansion_len >= capacity - 2) expand_capacity();
       result_index += sprintf(result + result_index, CALL_EXPANSION_LBL_1);
       strncpy(result + result_index, label->start, label->len);
@@ -264,7 +264,7 @@ void expand_rfei(bool* success){
     if (label != NULL){
 
       size_t expansion_len = strlen(RFEI_EXPANSION_LBL_1) + strlen(RFEI_EXPANSION_LBL_2) + 
-        strlen(RFEI_EXPANSION_LBL_3) + label->len + 2;
+        strlen(RFEI_EXPANSION_LBL_3) + label->len * 2 + 2;
       while (result_index + expansion_len >= capacity - 2) expand_capacity();
       result_index += sprintf(result + result_index, RFEI_EXPANSION_LBL_1);
       strncpy(result + result_index, label->start, label->len);
