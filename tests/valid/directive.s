@@ -9,7 +9,7 @@ DATA:
     
     tlbc
 
-    .origin 128
+    .origin 0x500
 
     .fill 0x42
 

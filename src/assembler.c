@@ -386,7 +386,7 @@ long consume_label_imm(enum ConsumeResult* result){
   } else {
     *result = NOT_FOUND;
   }
-  return imm;
+  return is_kernel ? imm + 0x400 : imm;
 }
 
 // consume a literal immediate or label immediate
@@ -1270,7 +1270,7 @@ bool process_labels(char const* const prog){
           fprintf(stderr, ".origin address must be a 32 bit integer\n");
           return false;
         }
-        pc = imm;
+        pc = is_kernel ? imm - 0x400 : imm;
         continue;
       }
       else if (consume_keyword(".fill")) {
@@ -1447,7 +1447,7 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
     }
   }
 
-  pc = 0;
+  pc = is_kernel ? 0x400 : 0;
   for (int i = 0; i < num_files; ++i){
     current_file_index = i;
     current_file = argv[file_names[i]];
