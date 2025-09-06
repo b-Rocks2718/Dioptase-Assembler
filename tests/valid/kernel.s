@@ -20,3 +20,5 @@ EXIT:
 
 INT_0:
     mode sleep
+
+    rfi r0, r0
