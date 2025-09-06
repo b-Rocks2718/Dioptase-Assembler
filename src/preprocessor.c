@@ -330,7 +330,7 @@ char** preprocess(int num_files, int* file_names, bool has_start,
     // add a jump to _start
     if (i == 0 && has_start){
       result_index += sprintf(result + result_index, 
-        "  movu r31, _start; movl r31, _start; br r31, r31");
+        "  movu r31, _start; movl r31, _start; br r31, r31\n");
     }
 
     while (*current != '\0'){

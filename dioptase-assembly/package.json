@@ -3,10 +3,10 @@
   "displayName": "Dioptase Assembly",
   "description": "Syntax highlighting and language support for the Dioptase assembly language.",
   "repository": {
-  "type": "git",
-  "url": "https://github.com/b-Rocks2718/Dioptase-Assembler.git"
+    "type": "git",
+    "url": "https://github.com/b-Rocks2718/Dioptase-Assembler.git"
   },
-  "version": "0.0.4",
+  "version": "0.0.5",
   "engines": {
     "vscode": "^1.103.0"
   },
@@ -14,21 +14,26 @@
     "Programming Languages"
   ],
   "contributes": {
-  "languages": [
-    {
-      "id": "dioptase",
-      "aliases": ["Dioptase Assembly", "dioptase"],
-      "extensions": [".s", ".asm"],
-      "configuration": "./language-configuration.json"
-    }
-  ],
-  "grammars": [
-    {
-      "language": "dioptase",
-      "scopeName": "source.dioptase",
-      "path": "./syntaxes/dioptase.tmLanguage.json"
-    }
-  ]
-}
-
+    "languages": [
+      {
+        "id": "dioptase",
+        "aliases": [
+          "Dioptase Assembly",
+          "dioptase"
+        ],
+        "extensions": [
+          ".s",
+          ".asm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dioptase",
+        "scopeName": "source.dioptase",
+        "path": "./syntaxes/dioptase.tmLanguage.json"
+      }
+    ]
+  }
 }

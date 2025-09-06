@@ -32,6 +32,7 @@ int pass_number = 1;
 
 // map labels to their addresses
 static struct HashMap** local_labels;
+static struct HashMap** local_defines;
 static struct HashMap* global_labels;
 
 // print line causing an error
@@ -267,7 +268,7 @@ long consume_literal(enum ConsumeResult* result) {
   // (only time leading 0 is allowed)
   if (*current == '0' && 
     (isspace(*(current + 1)) || *(current + 1) == '\0'
-      || *(current + 1) == ']')){
+      || *(current + 1) == ']' || *(current + 1) == '#')){
       *result = FOUND;
       current++;
       return 0;
@@ -375,6 +376,10 @@ long consume_label_imm(enum ConsumeResult* result){
     } else if (label_has_definition(global_labels, label)){
       imm = hash_map_get(global_labels, label) - pc - 4;
       *result = FOUND;
+    } else if (hash_map_contains(local_defines[current_file_index], label)){
+      imm = hash_map_get(local_defines[current_file_index], label);
+      *result = FOUND;
+      return imm;
     } else {
       print_error();
       fprintf(stderr, "Label \"");
@@ -1043,12 +1048,22 @@ int consume_mov_hack(int mov_type, bool* success){
   }
 
   enum ConsumeResult result;
-  int imm = consume_label_imm(&result); // don't encode bottom two bits of pc
-  if (result == FOUND) mov_type |= 2;
+
+  const char* old_current = current;
+  int imm = consume_label_imm(&result); // don't encode bottom two bits of pc  
+  if (result == FOUND) {
+    current = old_current;
+    struct Slice* label = consume_identifier();
+
+    // hack to see if this was a .define and not a label
+    if (!hash_map_contains(local_defines[current_file_index], label)) mov_type |= 2;
+
+    free(label);
+  }
   else imm = consume_literal(&result);
   if (result != FOUND){
     print_error();
-    if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
+    if (result == NOT_FOUND) fprintf(stderr, "movi expects label or integer literal\n");
     *success = false;
     return 0;
   }
@@ -1091,6 +1106,38 @@ int consume_mov_hack(int mov_type, bool* success){
   }
   
   return instruction; 
+}
+
+void record_define(bool* success){
+  struct Slice* label = consume_identifier();
+  if (label == NULL){
+    // error
+    print_error();
+    fprintf(stderr, "Expected label\n");
+    *success = false;
+    return;
+  }
+
+  enum ConsumeResult result;
+  long imm = consume_immediate(&result);
+  if (result != FOUND){
+    // error
+    print_error();
+    free(label);
+    fprintf(stderr, "Expected integer literal\n");
+    *success = false;
+    return;
+  }
+
+  if (hash_map_contains(local_defines[current_file_index], label)){
+    // error
+    print_error();
+    free(label);
+    fprintf(stderr, "constant has multiple definitions\n");
+    *success = false;
+    return;
+  }
+  hash_map_insert(local_defines[current_file_index], label, imm, true);  
 }
 
 // consumes a single instruction and converts it to binary or hex
@@ -1196,9 +1243,10 @@ int consume_instruction(enum ConsumeResult* result){
 // first pass, find all the labels and their addresses
 bool process_labels(char const* const prog){
   current = prog;
-  line_count = 1;
+  line_count = 0;
 
   local_labels[current_file_index] = create_hash_map(1000);
+  local_defines[current_file_index] = create_hash_map(1000);
 
   while (!is_at_end()){
 
@@ -1315,6 +1363,11 @@ bool process_labels(char const* const prog){
         }
         pc += imm * 4;
         continue;
+      } else if (consume_keyword(".define")) {
+        bool success = true;
+        record_define(&success);
+        if (!success) return false;
+        continue;
       }
       
       enum ConsumeResult result = FOUND;
@@ -1333,7 +1386,7 @@ bool process_labels(char const* const prog){
 // second pass, convert to binary
 bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
-  line_count = 1;
+  line_count = 0;
 
   enum ConsumeResult success = FOUND;
 
@@ -1360,6 +1413,9 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       free(name);
     }
     else if (consume_keyword(".kernel")); // handled in first pass
+    else if (consume_keyword(".define")){
+      skip_line();
+    } // handled in first pass
     else if (consume_keyword(".origin")) { 
       enum ConsumeResult result; 
       long imm = consume_literal(&result);
@@ -1442,6 +1498,7 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
   current_file_index = 0;
 
   local_labels = malloc(num_files * sizeof(struct HashMap*));
+  local_defines = malloc(num_files * sizeof(struct HashMap*));
 
   // make a hashmap of labels for each file + one global hashmap for global labels
   global_labels = create_hash_map(1000);
@@ -1451,7 +1508,9 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
     current_file = argv[file_names[i]];
     if (!process_labels(files[i] + 1)) {
       for (int j = 0; j <= i; ++j) destroy_hash_map(local_labels[j]);
+      for (int j = 0; j <= i; ++j) destroy_hash_map(local_defines[j]);
       free(local_labels);
+      free(local_defines);
       destroy_hash_map(global_labels);
       return NULL;
     }
@@ -1474,7 +1533,9 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
     current_file = argv[file_names[i]];
     if (!to_binary(files[i] + 1, instructions)){
       for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
       free(local_labels);
+      free(local_defines);
       destroy_hash_map(global_labels);
       destroy_instruction_array_list(instructions);
       return NULL;
@@ -1482,7 +1543,9 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
   }
 
   for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
   free(local_labels);
+  free(local_defines);
   destroy_hash_map(global_labels);
 
   return instructions;

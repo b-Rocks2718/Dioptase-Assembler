@@ -144,6 +144,8 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 
 `.space n` - expands to `.fill 0`, repeated `n` times
 
+`.define NAME n` - macro for defining constants
+
 ## Privileged instructions
 
 By default, the assembler assumes you are writing user code and rejects privileged instructions.   

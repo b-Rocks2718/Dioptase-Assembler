@@ -24,7 +24,7 @@ Remove everything with `make purge`
 cd into the `dioptase-assembly` directory and run
 
 ```bash
-code --install-extension dioptase-assembly-0.0.4.vsix
+code --install-extension dioptase-assembly-0.0.5.vsix
 ```
 
 for VSCode syntax highlighting

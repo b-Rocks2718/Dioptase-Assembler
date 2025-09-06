@@ -11,4 +11,4 @@ Open `.s` files in VS Code, the Dioptase assembly language mode should activate 
 Install the extension via VSIX package:
 
 ```bash
-code --install-extension dioptase-assembly-0.0.4.vsix
+code --install-extension dioptase-assembly-0.0.5.vsix
