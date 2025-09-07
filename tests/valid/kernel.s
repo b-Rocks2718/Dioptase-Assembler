@@ -18,7 +18,7 @@ _start:
 EXIT:
     mode halt
 
-INT_0:
+INT_TIMER:
     mode sleep
 
     rfi r0, r0
