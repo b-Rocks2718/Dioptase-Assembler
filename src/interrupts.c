@@ -5,7 +5,7 @@
 int NUM_INTERRUPTS = 22;
 
 struct InterruptEntry interrupts[] = {
-  {"EXIT", 0},
+  {"EXIT", 0x1},
   {"EXC_INSTR", 0x80},
   {"EXC_PRIV", 0x81},
   {"TLB_UMISS", 0x82},

@@ -867,7 +867,7 @@ int consume_jmp(bool* success){
 int consume_syscall(bool* success){
   if (consume("EXIT")){
     int instruction = 15 << 27;
-
+    instruction |= 1;
     return instruction;
   } else {
     // unrecognized call
