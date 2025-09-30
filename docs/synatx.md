@@ -118,7 +118,7 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 `rfei imm` - Alias for
 ```
 movi r30, <imm - 8>
-rfe  r30, r29
+rfe  r29, r30
 ```
 Do a -8 because we want the offset from the bl instruction, not the movi
 
