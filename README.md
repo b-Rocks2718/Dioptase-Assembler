@@ -33,6 +33,4 @@ for VSCode syntax highlighting
 
 Run all tests with `make test`
 
-To add a new test, add a `.s` source file and a `.ok` hex file of the same name to the `tests` directory. The `.ok` file should contain the expected assembler output.
-
 To run a specific test case, use `make <example>.test` where you replace `<example>` with the name of your test. 
