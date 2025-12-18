@@ -13,7 +13,7 @@ _start:
   mov r0, isr
   mov r0, imr
   mov r0, epc
-  mov r0, efg
+  mov r0, flg
   mov r0, cdv
   mov r0, tlb
   mov r0, ksp

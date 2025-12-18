@@ -202,9 +202,9 @@ int consume_register(void) {
   skip();
   size_t i = 0;
 
-  if (consume("sp")) return 1;
-  else if (consume("bp")) return 2;
-  else if (consume("ra")) return 31;
+  if (consume("sp")) return 31;
+  else if (consume("bp")) return 30;
+  else if (consume("ra")) return 29;
 
   // registers begin with an r
   else if (current[i] == 'r') {
@@ -246,7 +246,7 @@ int consume_control_register(void) {
     else if (consume("isr")) return 2;
     else if (consume("imr")) return 3;
     else if (consume("epc")) return 4;
-    else if (consume("efg")) return 5;
+    else if (consume("flg")) return 5;
     else if (consume("cdv")) return 6;
     else if (consume("tlb")) return 7;
     else if (consume("ksp")) return 8;
@@ -966,14 +966,20 @@ int consume_crmv(bool* success){
     }
   } else {
     rb = consume_control_register();
-    if (rb == -1){
-      print_error();
-      fprintf(stderr, "Invalid control register\n");
-      *success = false;
-      return 0; 
+    if (rb == -1) {
+      rb = consume_register();
+      if (rb == -1){
+        print_error();
+        fprintf(stderr, "Invalid register or control register\n");
+        *success = false;
+        return 0; 
+      }
+      // crmv rA, rB
+      instruction |= 7 << 10;
+    } else {
+      // crmv rA, crB
+      instruction |= 5 << 10;
     }
-    // crmv rA, crB
-    instruction |= 5 << 10;
   }
   instruction |= ra << 22;
   instruction |= rb << 17;

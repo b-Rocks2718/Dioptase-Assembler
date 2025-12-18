@@ -50,7 +50,7 @@ void expand_nop(void){
 }
 
 void expand_ret(void){
-  #define RET_EXPANSION "jmp  r31"
+  #define RET_EXPANSION "jmp  r29"
 
   size_t expansion_len = strlen(RET_EXPANSION) + 1; // account for null
   while (result_index + expansion_len >= capacity - 2) expand_capacity();
@@ -89,6 +89,74 @@ void expand_pop(bool* success){
   size_t expansion_len = strlen(POP_EXPANSION) + 2; // account for null
   while (result_index + expansion_len >= capacity - 2) expand_capacity();
   result_index += sprintf(result + result_index, POP_EXPANSION, ra);
+}
+
+void expand_pshd(bool* success){
+  #define PSHD_EXPANSION "sda  r%d [sp, -2]!"
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return;
+  }
+
+  size_t expansion_len = strlen(PSHD_EXPANSION) + 2; // account for null
+  while (result_index + expansion_len >= capacity - 2) expand_capacity();
+  result_index += sprintf(result + result_index, PSHD_EXPANSION, ra);
+}
+
+void expand_popd(bool* success){
+  #define POPD_EXPANSION "lda  r%d, [sp], 2"
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return;
+  }
+
+  size_t expansion_len = strlen(POPD_EXPANSION) + 2; // account for null
+  while (result_index + expansion_len >= capacity - 2) expand_capacity();
+  result_index += sprintf(result + result_index, POPD_EXPANSION, ra);
+}
+
+void expand_pshb(bool* success){
+  #define PSHB_EXPANSION "sba  r%d [sp, -1]!"
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return;
+  }
+
+  size_t expansion_len = strlen(PSHB_EXPANSION) + 2; // account for null
+  while (result_index + expansion_len >= capacity - 2) expand_capacity();
+  result_index += sprintf(result + result_index, PSHB_EXPANSION, ra);
+}
+
+void expand_popb(bool* success){
+  #define POPB_EXPANSION "lba  r%d, [sp], 1"
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return;
+  }
+
+  size_t expansion_len = strlen(POPB_EXPANSION) + 2; // account for null
+  while (result_index + expansion_len >= capacity - 2) expand_capacity();
+  result_index += sprintf(result + result_index, POPB_EXPANSION, ra);
 }
 
 void expand_movi(bool* success){
@@ -202,11 +270,11 @@ void expand_mov(bool* success){
 void expand_call(bool* success){
   // immediates can be numbers or labels
 
-  #define CALL_EXPANSION_LIT "movu r31, 0x%X; movl r31, 0x%X; br r31, r31"
+  #define CALL_EXPANSION_LIT "movu r29, 0x%X; movl r29, 0x%X; br r29, r29"
 
-  #define CALL_EXPANSION_LBL_1 "movu r31, "
-  #define CALL_EXPANSION_LBL_2 "; movl r31, "
-  #define CALL_EXPANSION_LBL_3 "; br r31, r31"
+  #define CALL_EXPANSION_LBL_1 "movu r29, "
+  #define CALL_EXPANSION_LBL_2 "; movl r29, "
+  #define CALL_EXPANSION_LBL_3 "; br r29, r29"
 
   enum ConsumeResult c_result;
   long imm = consume_literal(&c_result);
@@ -248,6 +316,12 @@ bool expand_macros(void){
   else if (consume_keyword("ret")) expand_ret();
   else if (consume_keyword("push")) expand_push(&success);
   else if (consume_keyword("pop")) expand_pop(&success);
+  else if (consume_keyword("pshw")) expand_push(&success);
+  else if (consume_keyword("popw")) expand_pop(&success);
+  else if (consume_keyword("pshd")) expand_pshd(&success);
+  else if (consume_keyword("popd")) expand_popd(&success);
+  else if (consume_keyword("pshb")) expand_pshb(&success);
+  else if (consume_keyword("popb")) expand_popb(&success);
   else if (consume_keyword("movi")) expand_movi(&success);
   else if (consume_keyword("mov")) expand_mov(&success);
   else if (consume_keyword("call")) expand_call(&success);
@@ -286,7 +360,7 @@ char** preprocess(int num_files, int* file_names, bool has_start,
     // add a jump to _start
     if (i == 0 && has_start){
       result_index += sprintf(result + result_index, 
-        "  movu r31, _start; movl r31, _start; br r31, r31\n");
+        "  movu r29, _start; movl r29, _start; br r29, r29\n");
     }
 
     while (*current != '\0'){

@@ -1,4 +1,4 @@
-.global func
+  .global func
 func:
   nop
   nop

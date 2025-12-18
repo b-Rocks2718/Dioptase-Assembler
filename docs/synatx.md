@@ -20,20 +20,22 @@ Ex: `add r1 r2 r3 # this is a comment`
 
 Valid registers: `r0` - `r31`  
 `r0` is enforced by the hardware to be identically 0  
-`sp` (stack pointer) is an alias for `r1`  
-`bp` (base pointer)  is an alias for `r2`  
-`ra` (return address) is an alias for `r31`
+`sp` (stack pointer) is an alias for `r31`  
+`bp` (base pointer)  is an alias for `r30`  
+`ra` (return address) is an alias for `r29`
 
 Valid control registers:
 
-`cr0` - `cr6`  
+`cr0` - `cr8`  
 `psr` (processor status register) is an alias for `cr0`  
 `pid` (process ID) is an alias for `cr1`  
 `isr` (interrupt status register) is an alias for `cr2`  
 `imr` (interrupt mask register) is an alias for `cr3`  
 `epc` (exceptional PC) is an alias for `cr4`  
-`efg` (exceptional flags) is an alias for `cr5`  
+`flg` (flags) is an alias for `cr5`  
 `cdv` (clock divider) is an alias for `cr6`  
+`tlb` (translation lookaside buffer) is an alias for `cr7`
+`ksp` (kernel stack pointer) is an alias for `cr8`
 
 You can pass any nonzero number of .s files into the assembler and it will produce a single `.hex` file.
 Whenever the assembler is called, exactly one of the files passed in must contain a `_start` label.
@@ -94,9 +96,21 @@ The first operand, which specifies where the pc will be stored, can be optionall
 
 `nop` - Alias for `and r0, r0, r0` (which is the same as `.fill 0`). Has no effect when executed.  
 
-`push rA` - Alias for `sw rA [sp, -4]!` (decrement sp, then store)
+`push rA` - Alias for `swa rA [sp, -4]!` (decrement sp, then store)
 
-`pop rA` - Alias for `lw rA, [sp], 4` (load, then increment sp)
+`pop rA` - Alias for `lwa rA, [sp], 4` (load, then increment sp)
+
+`pshw rA` - Alias for `swa rA [sp, -4]!` 
+
+`popw rA` - Alias for `lwa rA, [sp], 4` 
+
+`pshd rA` - Alias for `sda rA [sp, -4]!` 
+
+`popd rA` - Alias for `lda rA, [sp], 4` 
+
+`pshb rA` - Alias for `sba rA [sp, -4]!` 
+
+`popb rA` - Alias for `lba rA, [sp], 4`  
 
 `mov rA, rB` - Alias for `add rA, rB, r0` when`rA` and `rB` are not control registers. If at least one is a control register, then this is an alias for a `crmv` instruction.  
 
@@ -110,12 +124,12 @@ Can put any 32 bit value in a register
 
 `call imm` - Alias for
 ```
-movi r31, <imm - 8>
-bl  r31, r31
+movi r29, <imm - 8>
+bl  r29, r29
 ```
 Do a -8 because we want the offset from the bl instruction, not the movi
 
-`ret` - Alias for  `jmp r31`
+`ret` - Alias for  `jmp r29`
 
 `jmp rA` - Alias for  `bra rA`
 
