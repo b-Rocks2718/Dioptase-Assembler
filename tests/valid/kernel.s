@@ -12,7 +12,7 @@ _start:
     mode sleep
     mode halt
 
-    rfe r29, r30
+    rfe
     sys EXIT
 
 EXIT:
@@ -21,4 +21,4 @@ EXIT:
 INT_TIMER:
     mode sleep
 
-    rfi r0, r0
+    rfi

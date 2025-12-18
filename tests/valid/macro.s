@@ -13,6 +13,5 @@ label:
   movi r1, 0xAAAA5555
   movi r2, 1
   call label
-  rfei label
   jmp  label
   jmp  r2

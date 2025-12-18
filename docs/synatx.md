@@ -115,13 +115,6 @@ bl  r31, r31
 ```
 Do a -8 because we want the offset from the bl instruction, not the movi
 
-`rfei imm` - Alias for
-```
-movi r30, <imm - 8>
-rfe  r29, r30
-```
-Do a -8 because we want the offset from the bl instruction, not the movi
-
 `ret` - Alias for  `jmp r31`
 
 `jmp rA` - Alias for  `bra rA`
