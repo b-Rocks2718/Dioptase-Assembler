@@ -4,3 +4,5 @@ build
 *.gcda 
 *.gcov
 coverage.info
+dioptase-assembly/.npm-cache
+dioptase-assembly/node_modules

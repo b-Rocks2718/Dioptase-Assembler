@@ -16,3 +16,4 @@ _start:
   mov r0, efg
   mov r0, cdv
   mov r0, tlb
+  mov r0, ksp

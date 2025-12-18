@@ -2,11 +2,12 @@
   "name": "dioptase-assembly",
   "displayName": "Dioptase Assembly",
   "description": "Syntax highlighting and language support for the Dioptase assembly language.",
+  "publisher": "b-Rocks2718",
   "repository": {
     "type": "git",
     "url": "https://github.com/b-Rocks2718/Dioptase-Assembler.git"
   },
-  "version": "0.0.5",
+  "version": "0.0.6",
   "engines": {
     "vscode": "^1.103.0"
   },
@@ -35,5 +36,11 @@
         "path": "./syntaxes/dioptase.tmLanguage.json"
       }
     ]
+  },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.30.0"
   }
 }

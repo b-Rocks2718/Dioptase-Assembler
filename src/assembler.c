@@ -237,7 +237,7 @@ int consume_control_register(void) {
       i += 1;
     }
 
-    if (v > 7) return -1;
+    if (v > 8) return -1;
     current += i;
     return v;
   } else {
@@ -249,6 +249,7 @@ int consume_control_register(void) {
     else if (consume("efg")) return 5;
     else if (consume("cdv")) return 6;
     else if (consume("tlb")) return 7;
+    else if (consume("ksp")) return 8;
     else return -1;
   }
 }
