@@ -22,3 +22,4 @@ INT_TIMER:
     mode sleep
     crmv r3, r31
     rfi
+    tlbi r3

@@ -901,9 +901,26 @@ int consume_tlb_op(int tlb_op, bool* success){
 
   int instruction = 31 << 27; // opcode
 
-  if (tlb_op == 2){
-    instruction |= 1 << 11;
+  if (tlb_op == 3){
+    // tlbc
+    instruction |= 3 << 10;
+  } else if (tlb_op == 2){
+    // tlbi
+    instruction |= 2 << 10;
+
+    int rb = consume_register();
+    if (rb == -1){
+      print_error();
+      fprintf(stderr, "Invalid register\n");
+      fprintf(stderr, "Valid registers are r0 - r31\n");
+      *success = false;
+      return 0;
+    }
+
+    instruction |= rb << 17;
+
   } else {
+    // tlbr or tlbw
     int ra = consume_register();
     if (ra == -1){
       print_error();
@@ -1212,7 +1229,8 @@ int consume_instruction(enum ConsumeResult* result){
   // privileged instructions
   else if (consume_keyword("tlbr")) instruction = consume_tlb_op(0, &success);
   else if (consume_keyword("tlbw")) instruction = consume_tlb_op(1, &success);
-  else if (consume_keyword("tlbc")) instruction = consume_tlb_op(2, &success);
+  else if (consume_keyword("tlbi")) instruction = consume_tlb_op(2, &success);
+  else if (consume_keyword("tlbc")) instruction = consume_tlb_op(3, &success);
   else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
   else if (consume_keyword("rfe")) instruction = consume_rfe(0, &success);
