@@ -15,7 +15,7 @@ struct InterruptEntry interrupts[] = {
   {"INT_KEYBOARD", 0xF1},
   {"INT_UART", 0xF2},
   {"INT_SD", 0xF3},
-  {"INT_4", 0xF4},
+  {"INT_VGA", 0xF4},
   {"INT_5", 0xF5},
   {"INT_6", 0xF6},
   {"INT_7", 0xF7},
