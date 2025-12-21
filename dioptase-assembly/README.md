@@ -16,5 +16,5 @@ or `vsce package`
 Install the extension via VSIX package:
 
 ```bash
-code --install-extension dioptase-assembly-0.0.8.vsix
+code --install-extension dioptase-assembly-0.0.9.vsix
 ```

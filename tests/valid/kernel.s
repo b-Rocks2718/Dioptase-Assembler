@@ -23,3 +23,5 @@ INT_TIMER:
     crmv r3, r31
     rfi
     tlbi r3
+    ipi  r3, 2
+    ipi  r3, all

@@ -237,7 +237,7 @@ int consume_control_register(void) {
       i += 1;
     }
 
-    if (v > 8) return -1;
+    if (v > 11) return -1;
     current += i;
     return v;
   } else {
@@ -247,9 +247,11 @@ int consume_control_register(void) {
     else if (consume("imr")) return 3;
     else if (consume("epc")) return 4;
     else if (consume("flg")) return 5;
-    else if (consume("cdv")) return 6;
     else if (consume("tlb")) return 7;
     else if (consume("ksp")) return 8;
+    else if (consume("cid")) return 9;
+    else if (consume("mbi")) return 10;
+    else if (consume("mbo")) return 11;
     else return -1;
   }
 }
@@ -880,6 +882,134 @@ int consume_syscall(bool* success){
   }
 }
 
+int encode_short_atomic_immediate(long imm, bool* success){
+  // top n bits must all be 0s or all be 1s
+  // the bottom 12 bits become part of the instruction
+  if (imm == (imm & 0xFFF) || ~imm == (~imm & 0xFFF)){
+    return imm & 0xFFF;
+  } else {
+    // can't encode
+    print_error();
+    fprintf(stderr, "Invalid immediate for memory instruction\n");
+    fprintf(stderr, "Immediate must fit in 16 bits\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+}
+
+int encode_long_atomic_immediate(long imm, bool* success){
+  // top n bits must all be 0s or all be 1s
+  // the bottom 17 bits become part of the instruction
+  if (imm == (imm & 0x1FFFF) || ~imm == (~imm & 0x1FFFF)){
+    return imm & 0x1FFFF;
+  } else {
+    // can't encode
+    print_error();
+    fprintf(stderr, "Invalid immediate for memory instruction\n");
+    fprintf(stderr, "Immediate must fit in 21 bits\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+}
+
+int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
+  int instruction = 0;
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  int rc = consume_register();
+  if (rc == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  if (!consume("[")){
+    *success = false;
+    print_error();
+    fprintf(stderr, "Expected \"[\" in memory instruction\n");
+    return 0;
+  }
+
+  int rb = consume_register();
+  if (rb == -1){
+    if (is_absolute){
+      print_error();
+      fprintf(stderr, "Invalid register\n");
+      fprintf(stderr, "Valid registers are r0 - r31\n");
+      *success = false;
+      return 0;
+    }
+  }
+
+  long imm = 0;
+
+  if (consume("]")){
+    // no offset
+    imm = 0;
+  } else {
+    // signed offset
+    enum ConsumeResult result;
+    imm = consume_immediate(&result);
+    if (result == FOUND){
+      if (!consume("]")){
+        print_error();
+        fprintf(stderr, "Expected \"]\" in memory instruction\n");
+        *success = false;
+        return 0;
+      }
+    } else {
+      // error
+      print_error();
+      fprintf(stderr, "Invalid immediate in memory instruction\n");
+      *success = false;
+      return 0;
+    }
+  }
+  int encoding;
+  
+  if (is_absolute) encoding = encode_short_atomic_immediate(imm, success);
+  else if (rb != -1) encoding = encode_short_atomic_immediate(imm, success);
+  else encoding = encode_long_atomic_immediate(imm, success);
+
+  // opcode
+  if (is_absolute){
+    instruction |= (is_fadd ? 16 : 19) << 27;
+  } else if (rb != -1) {
+    instruction |= (is_fadd ? 17 : 20) << 27;
+  } else {
+    instruction |= (is_fadd ? 18 : 21) << 27;
+  }
+
+  instruction |= ra << 22;
+  instruction |= rc << 17;
+  
+  if (is_absolute){
+    assert(encoding == (encoding & 0xFFF)); // ensure encoding is 12 bits
+    instruction |= rb << 12;
+  } else if (rb != -1) {
+    assert(encoding == (encoding & 0xFFF)); // ensure encoding is 12 bits
+    instruction |= rb << 12;
+  } else {
+    assert(encoding == (encoding & 0x1FFFF)); // ensure encoding is 17 bits
+  }
+
+  instruction |= encoding;
+
+  return instruction;
+}
+
 void check_privileges(bool* success){
   static bool has_printed = false;
   if (!is_kernel){
@@ -1035,6 +1165,48 @@ int consume_rfe(int r_type, bool* success){
   int instruction = 31 << 27;
   instruction |= r_type << 11;
   instruction |= 3 << 12;
+
+  return instruction;
+}
+
+int consume_ipi(bool* success){
+  check_privileges(success);
+  if (!success) return 0;
+
+  int instruction = 31 << 27; // opcode
+  instruction |= 4 << 12; // ID
+
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  skip();
+
+  instruction |= ra << 22;
+  
+  if (consume_keyword("all")) {
+    // ipi to all cores
+    instruction |= 1 << 11;
+  } else {
+    // ipi to a specific core
+    enum ConsumeResult result;
+    int imm = consume_literal(&result);
+    if (result != FOUND || imm < 0 || imm >= 4){
+      print_error();
+      if (result == NOT_FOUND) fprintf(stderr, "ipi instruction expects 'all' or core num in range [0, 3]\n");
+      *success = false;
+      return 0;
+    }
+
+    assert(0 <= imm && imm < 4);
+
+    instruction |= imm;
+  }
 
   return instruction;
 }
@@ -1225,6 +1397,10 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
   else if (consume_keyword("jmp")) instruction = consume_jmp(&success);
   else if (consume_keyword("sys")) instruction = consume_syscall(&success);
+  else if (consume_keyword("fada")) instruction = consume_atomic(true, true, &success);
+  else if (consume_keyword("fad")) instruction = consume_atomic(false, true, &success);
+  else if (consume_keyword("swpa")) instruction = consume_atomic(true, false, &success);
+  else if (consume_keyword("swp")) instruction = consume_atomic(false, false, &success);
 
   // privileged instructions
   else if (consume_keyword("tlbr")) instruction = consume_tlb_op(0, &success);
@@ -1235,6 +1411,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
   else if (consume_keyword("rfe")) instruction = consume_rfe(0, &success);
   else if (consume_keyword("rfi")) instruction = consume_rfe(1, &success);
+  else if (consume_keyword("ipi")) instruction = consume_ipi(&success);
 
   // hacks to make movi and call work
   else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
