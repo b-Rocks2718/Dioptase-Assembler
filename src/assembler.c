@@ -930,7 +930,7 @@ int encode_short_atomic_immediate(long imm, bool* success){
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 16 bits\n");
+    fprintf(stderr, "Immediate must fit in 12 bits\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
@@ -946,7 +946,7 @@ int encode_long_atomic_immediate(long imm, bool* success){
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 21 bits\n");
+    fprintf(stderr, "Immediate must fit in 17 bits\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
