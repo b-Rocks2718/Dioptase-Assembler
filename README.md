@@ -18,6 +18,7 @@ Remove everything with `make purge`
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
 `-o` to name the output file (./a.hex is the default)  
 `-nostart` if your program does not define a start label to jump to (execution will begin at address 0)  
+`--debug` to append `#label` annotations (label name + address) to the output and emit a `.debug` file instead of `.hex`  
 
 ## Syntax Highlighting
 

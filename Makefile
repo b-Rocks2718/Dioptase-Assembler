@@ -18,7 +18,10 @@ VALID_TESTS    := $(patsubst tests/valid/%.ok,%, $(TEST_OKS))
 INVALID_SRCS := $(wildcard tests/invalid/*.s)
 INVALID_TESTS:= $(patsubst tests/invalid/%.s,%, $(INVALID_SRCS))
 
-TOTAL := $(words $(VALID_TESTS)) $(words $(INVALID_TESTS))
+DEBUG_SRCS := $(wildcard tests/debug/*.s)
+DEBUG_TESTS:= $(patsubst tests/debug/%.s,%, $(DEBUG_SRCS))
+
+TOTAL := $(words $(VALID_TESTS)) $(words $(INVALID_TESTS)) $(words $(DEBUG_TESTS))
 
 .PRECIOUS: tests/valid/%.hex
 
@@ -69,7 +72,7 @@ test: dirs $(EXEC)
 	RED="\033[0;31m"; \
 	YELLOW="\033[0;33m"; \
 	NC="\033[0m"; \
-	passed=0; total=$$(( $(words $(VALID_TESTS)) + $(words $(INVALID_TESTS)) + 2)); \
+	passed=0; total=$$(( $(words $(VALID_TESTS)) + $(words $(INVALID_TESTS)) + $(words $(DEBUG_TESTS)) + 2)); \
 	echo "Running $(words $(VALID_TESTS) x) valid tests:"; \
 	for t in $(VALID_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
@@ -128,6 +131,39 @@ test: dirs $(EXEC)
 	    echo "$$RED FAIL $$NC"; \
 	  fi; \
 	fi; \
+	echo "\nRunning $(words $(DEBUG_TESTS) x) debug label tests:"; \
+	for t in $(DEBUG_TESTS); do \
+	  printf "%s %-20s " '-' "$$t"; \
+	  rm -f tests/debug/$$t.debug tests/debug/$$t.hex; \
+	  if timeout 1s $(EXEC) -debug tests/debug/$$t.s -o tests/debug/$$t.hex >/dev/null 2>&1; then \
+	    if [ -f tests/debug/$$t.debug ]; then \
+	      ok=1; \
+	      if [ -f tests/debug/$$t.labels ]; then \
+	        while IFS= read -r line; do \
+	          if ! grep -Fq "$$line" tests/debug/$$t.debug; then \
+	            ok=0; \
+	            break; \
+	          fi; \
+	        done < tests/debug/$$t.labels; \
+	      else \
+	        ok=0; \
+	      fi; \
+	      if [ $$ok -eq 1 ]; then \
+	        echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	      else \
+	        echo "$$RED FAIL $$NC"; \
+	      fi; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  else \
+	    if [ $$? -eq 124 ]; then \
+	      echo "$$YELLOW TIMEOUT $$NC"; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  fi; \
+	done; \
 	echo; \
 	echo "Summary: $$passed / $$total tests passed.";
 
@@ -154,6 +190,8 @@ clean:
 	rm -f tests/invalid/*.hex
 	rm -f tests/valid/lib/*.hex
 	rm -f tests/invalid/lib/*.hex
+	rm -f tests/debug/*.debug
+	rm -f tests/debug/*.hex
 	rm -f *.gcno *.gcda *.gcov
 	rm -f coverage.info
 	rm -f a.hex
@@ -162,4 +200,3 @@ clean:
 .PHONY: purge
 purge: clean
 	rm -rf $(BUILD_DIR) $(BIN_DIR)
-

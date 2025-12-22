@@ -10,6 +10,7 @@
 #include "assembler.h"
 #include "hashmap.h"
 #include "instruction_array.h"
+#include "label_list.h"
 #include "preprocessor.h"
 #include "interrupts.h"
 
@@ -1733,10 +1734,24 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
   return true;
 }
 
+static void append_labels_from_map(struct HashMap* map, struct LabelList* labels, uint32_t offset){
+  for (size_t i = 0; i < map->size; ++i){
+    struct HashEntry* entry = map->arr[i];
+    while (entry != NULL){
+      if (entry->is_defined){
+        uint32_t addr = (uint32_t)(entry->value + offset);
+        label_list_append(labels, entry->key->start, entry->key->len, addr);
+      }
+      entry = entry->next;
+    }
+  }
+}
+
 // assemble an entire program
 struct InstructionArrayList* assemble(int num_files, int* file_names, 
-  const char *const *const argv, char** files){
+  const char *const *const argv, char** files, struct LabelList** labels_out){
 
+  if (labels_out != NULL) *labels_out = NULL;
   is_kernel = false;
 
   current_file_index = 0;
@@ -1784,6 +1799,15 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
       destroy_instruction_array_list(instructions);
       return NULL;
     }
+  }
+
+  if (labels_out != NULL){
+    struct LabelList* labels = create_label_list(128);
+    uint32_t offset = is_kernel ? 0x400 : 0;
+    for (int j = 0; j < num_files; ++j) {
+      append_labels_from_map(local_labels[j], labels, offset);
+    }
+    *labels_out = labels;
   }
 
   for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);

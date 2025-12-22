@@ -10,8 +10,10 @@ extern unsigned long pc;
 // does the file wish to use pivileges instructions?
 extern bool is_kernel;
 
+struct LabelList;
+
 struct InstructionArrayList* assemble(int num_files, int* file_names, 
-  const char *const *const argv, char** files);
+  const char *const *const argv, char** files, struct LabelList** labels_out);
 
 enum ConsumeResult {
   ERROR,
