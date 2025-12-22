@@ -35,6 +35,19 @@ static struct HashMap** local_labels;
 static struct HashMap** local_defines;
 static struct HashMap* global_labels;
 
+static bool is_identifier_char(char c) {
+  return isalnum((unsigned char)c) || c == '_' || c == '.';
+}
+
+static bool consume_named_register(const char* name) {
+  size_t len = strlen(name);
+  if (strncmp(current, name, len) == 0 && !is_identifier_char(current[len])) {
+    current += len;
+    return true;
+  }
+  return false;
+}
+
 // print line causing an error
 void print_error(void) {
   // avoid printing this twice
@@ -179,10 +192,11 @@ bool skip_label(struct InstructionArrayList* instructions){
   struct Slice* label = consume_identifier();
   if (label != NULL && consume(":")) {
     if (is_kernel){
-      // set up IVT
-      // yes this is spaghetti code
+      // Update IVT entries when a label exactly matches an interrupt name.
       for (int i = 0; i < NUM_INTERRUPTS; ++i){
-        if (strncmp(label->start, interrupts[i].name, label->len) == 0){
+        if ((strncmp(label->start, interrupts[i].name, label->len) == 0)
+            && (label->len == strlen(interrupts[i].name))){
+          // 0x400 is the kernel code start after the IVT.
           instructions->head->instructions[interrupts[i].addr] = 1024 + hash_map_get(local_labels[current_file_index], label);
         }
       }
@@ -200,23 +214,22 @@ bool skip_label(struct InstructionArrayList* instructions){
 // attempt to consume a register
 int consume_register(void) {
   skip();
-  size_t i = 0;
 
-  if (consume("sp")) return 31;
-  else if (consume("bp")) return 30;
-  else if (consume("ra")) return 29;
+  if (consume_named_register("sp")) return 31;
+  else if (consume_named_register("bp")) return 30;
+  else if (consume_named_register("ra")) return 29;
 
   // registers begin with an r
-  else if (current[i] == 'r') {
+  else if (current[0] == 'r' && isdigit((unsigned char)current[1])) {
     int v = 0;
-    i += 1;
-    while(isdigit(current[i])) {
+    size_t i = 1;
+    while(isdigit((unsigned char)current[i])) {
       // then followed by numbers
       v = 10 * v + current[i] - '0';
       i += 1;
     }
 
-    if (v > 31) return -1;
+    if (v > 31 || is_identifier_char(current[i])) return -1;
     current += i;
     return v;
   }
@@ -226,32 +239,31 @@ int consume_register(void) {
 // attempt to consume a control register
 int consume_control_register(void) {
   skip();
-  size_t i = 0;
   // registers begin with an r
-  if (current[i] == 'c' && current[i + 1] == 'r') {
+  if (current[0] == 'c' && current[1] == 'r' && isdigit((unsigned char)current[2])) {
     int v = 0;
-    i += 2;
-    while(isdigit(current[i])) {
+    size_t i = 2;
+    while(isdigit((unsigned char)current[i])) {
       // then followed by numbers
       v = 10 * v + current[i] - '0';
       i += 1;
     }
 
-    if (v > 11) return -1;
+    if (v > 11 || is_identifier_char(current[i])) return -1;
     current += i;
     return v;
   } else {
-    if (consume("psr")) return 0;
-    else if (consume("pid")) return 1;
-    else if (consume("isr")) return 2;
-    else if (consume("imr")) return 3;
-    else if (consume("epc")) return 4;
-    else if (consume("flg")) return 5;
-    else if (consume("tlb")) return 7;
-    else if (consume("ksp")) return 8;
-    else if (consume("cid")) return 9;
-    else if (consume("mbi")) return 10;
-    else if (consume("mbo")) return 11;
+    if (consume_named_register("psr")) return 0;
+    else if (consume_named_register("pid")) return 1;
+    else if (consume_named_register("isr")) return 2;
+    else if (consume_named_register("imr")) return 3;
+    else if (consume_named_register("epc")) return 4;
+    else if (consume_named_register("flg")) return 5;
+    else if (consume_named_register("tlb")) return 7;
+    else if (consume_named_register("ksp")) return 8;
+    else if (consume_named_register("cid")) return 9;
+    else if (consume_named_register("mbi")) return 10;
+    else if (consume_named_register("mbo")) return 11;
     else return -1;
   }
 }
@@ -292,7 +304,9 @@ long consume_literal(enum ConsumeResult* result) {
     // Binary literal
     current += 2;
     long v = 0;
-    while (isdigit(*current)) {
+    bool saw_digit = false;
+    while (isdigit((unsigned char)*current)) {
+      saw_digit = true;
       if ((*current) - '0' > 1){
         print_error();
         fprintf(stderr, "Invalid binary literal\n");
@@ -303,6 +317,13 @@ long consume_literal(enum ConsumeResult* result) {
       current += 1;
     }
 
+    if (!saw_digit){
+      print_error();
+      fprintf(stderr, "Binary literal requires at least one digit\n");
+      *result = ERROR;
+      return 0;
+    }
+
     *result = FOUND;
     if (negate) v *= -1;
     return v;
@@ -310,8 +331,10 @@ long consume_literal(enum ConsumeResult* result) {
     current += 2;
     // octal literal
     long v = 0;
-    while (isdigit(*current)) {
-      if ((*current) - '7' > 1){
+    bool saw_digit = false;
+    while (isdigit((unsigned char)*current)) {
+      saw_digit = true;
+      if ((*current) - '7' > 0){
         print_error();
         fprintf(stderr, "Invalid octal literal\n");
         *result = ERROR;
@@ -321,13 +344,21 @@ long consume_literal(enum ConsumeResult* result) {
       current += 1;
     }
 
+    if (!saw_digit){
+      print_error();
+      fprintf(stderr, "Octal literal requires at least one digit\n");
+      *result = ERROR;
+      return 0;
+    }
+
     *result = FOUND;
     if (negate) v *= -1;
     return v;
   } else if (*current == '0' && (*(current + 1) == 'x' || *(current + 1) == 'X')) {
     long v = 0;
     current += 2;
-    while (isalnum(*current)) {
+    bool saw_digit = false;
+    while (isalnum((unsigned char)*current)) {
       int d;
       if (isdigit(*current)){
         d = *current - '0';
@@ -342,8 +373,16 @@ long consume_literal(enum ConsumeResult* result) {
         return 0;
       }
 
+      saw_digit = true;
       v = 16*v + d;
       current += 1;
+    }
+
+    if (!saw_digit){
+      print_error();
+      fprintf(stderr, "Hex literal requires at least one digit\n");
+      *result = ERROR;
+      return 0;
     }
 
     *result = FOUND;
@@ -358,7 +397,7 @@ long consume_literal(enum ConsumeResult* result) {
 
 long consume_label_imm(enum ConsumeResult* result){
   struct Slice* label = consume_identifier();
-  long imm;
+  long imm = 0;
   if (label != NULL){
 
     // don't try to decode labels on first pass
@@ -394,6 +433,7 @@ long consume_label_imm(enum ConsumeResult* result){
   } else {
     *result = NOT_FOUND;
   }
+  // Kernel code is relocated to 0x400 (after the IVT), so adjust label immediates.
   return is_kernel ? imm + 0x400 : imm;
 }
 
@@ -402,7 +442,6 @@ long consume_immediate(enum ConsumeResult* result){
   long imm = consume_label_imm(result);
   if (*result == NOT_FOUND){
     imm = consume_literal(result);
-    *result = FOUND;
   }
   return imm;
 }
@@ -689,14 +728,14 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
   }
 
   long imm = 0;
-  int y = 0;
+  int y = 0; // absolute addressing mode selector: 0=offset, 1=preinc, 2=postinc
 
   if (consume("]")){
     if (is_absolute){
       enum ConsumeResult result;
       imm = consume_literal(&result);
       if (result == FOUND){
-        // postincrement
+        // postincrement: [rb], imm
         if (!is_absolute){
           print_error();
           fprintf(stderr, "Postincrement addressing not allowed for relative addressing\n");
@@ -705,7 +744,7 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
         }
         y = 2;
       } else if (result == NOT_FOUND){
-        // no offset
+        // no offset: [rb]
         imm = 0;
         y = 0;
       } else {
@@ -725,7 +764,7 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
         return 0;
       }
       if (consume("!")){
-        // preincrement
+        // preincrement: [rb, imm]!
         if (!is_absolute){
           print_error();
           fprintf(stderr, "Preincrement addressing not allowed for relative addressing\n");
@@ -734,7 +773,7 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
         }
         y = 1;
       } else {
-        // signed offset
+        // signed offset: [rb, imm]
         y = 0;
       }
     } else {
@@ -1012,6 +1051,7 @@ int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
 
 void check_privileges(bool* success){
   static bool has_printed = false;
+  // Privileged instructions require a .kernel directive in the program.
   if (!is_kernel){
     *success = false;
     if (!has_printed){
@@ -1025,7 +1065,7 @@ void check_privileges(bool* success){
 
 int consume_tlb_op(int tlb_op, bool* success){
   check_privileges(success);
-  if (!success) return 0;
+  if (!*success) return 0;
 
   assert(0 <= tlb_op && tlb_op < 4); // ensure tlb op is valid
 
@@ -1081,7 +1121,7 @@ int consume_tlb_op(int tlb_op, bool* success){
 
 int consume_crmv(bool* success){
   check_privileges(success);
-  if (!success) return 0;
+  if (!*success) return 0;
 
   int instruction = 31 << 27;
   instruction |= 1 << 12;
@@ -1136,7 +1176,7 @@ int consume_crmv(bool* success){
 
 int consume_mode_op(bool* success){
   check_privileges(success);
-  if (!success) return 0;
+  if (!*success) return 0;
 
   int instruction = 31 << 27; // opcode
   instruction |= 2 << 12;
@@ -1160,7 +1200,7 @@ int consume_mode_op(bool* success){
 int consume_rfe(int r_type, bool* success){
   assert(0 <= r_type && r_type <= 1);
   check_privileges(success);
-  if (!success) return 0;
+  if (!*success) return 0;
 
   int instruction = 31 << 27;
   instruction |= r_type << 11;
@@ -1171,7 +1211,7 @@ int consume_rfe(int r_type, bool* success){
 
 int consume_ipi(bool* success){
   check_privileges(success);
-  if (!success) return 0;
+  if (!*success) return 0;
 
   int instruction = 31 << 27; // opcode
   instruction |= 4 << 12; // ID
@@ -1296,12 +1336,40 @@ void record_define(bool* success){
   }
 
   enum ConsumeResult result;
-  long imm = consume_immediate(&result);
-  if (result != FOUND){
+  long imm = consume_literal(&result);
+  if (result == NOT_FOUND){
+    struct Slice* value_label = consume_identifier();
+    if (value_label == NULL){
+      print_error();
+      free(label);
+      fprintf(stderr, "Expected integer literal or label\n");
+      *success = false;
+      return;
+    }
+    if (hash_map_contains(local_defines[current_file_index], value_label)){
+      imm = hash_map_get(local_defines[current_file_index], value_label);
+    } else if (label_has_definition(local_labels[current_file_index], value_label)){
+      imm = hash_map_get(local_labels[current_file_index], value_label);
+      if (is_kernel) imm += 0x400;
+    } else if (label_has_definition(global_labels, value_label)){
+      imm = hash_map_get(global_labels, value_label);
+      if (is_kernel) imm += 0x400;
+    } else {
+      print_error();
+      fprintf(stderr, "Label \"");
+      print_slice_err(value_label);
+      fprintf(stderr, "\" has not been defined\n");
+      free(value_label);
+      free(label);
+      *success = false;
+      return;
+    }
+    free(value_label);
+  } else if (result != FOUND){
     // error
     print_error();
     free(label);
-    fprintf(stderr, "Expected integer literal\n");
+    fprintf(stderr, "Expected integer literal or label\n");
     *success = false;
     return;
   }
