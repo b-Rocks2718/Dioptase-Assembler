@@ -666,15 +666,13 @@ int encode_absolute_memory_immediate(long imm, bool* success){
 }
 
 int encode_relative_memory_immediate(long imm, bool* success){
-  // top n bits must all be 0s or all be 1s
-  // the bottom 16 bits become part of the instruction
-  if (imm == (imm & 0xFFFF) || ~imm == (~imm & 0xFFFF)){
-    return imm & 0xFFFF;
+  if (-(1L << 15) <= imm && imm < (1L << 15)){
+    return (int)imm & 0xFFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 16 bits\n");
+    fprintf(stderr, "Immediate must fit in signed 16 bits (-32768 to 32767)\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
@@ -682,15 +680,13 @@ int encode_relative_memory_immediate(long imm, bool* success){
 }
 
 int encode_long_relative_memory_immediate(long imm, bool* success){
-  // top n bits must all be 0s or all be 1s
-  // the bottom 21 bits become part of the instruction
-  if (imm == (imm & 0x1FFFFF) || ~imm == (~imm & 0x1FFFFF)){
-    return imm & 0x1FFFFF;
+  if (-(1L << 20) <= imm && imm < (1L << 20)){
+    return (int)imm & 0x1FFFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 21 bits\n");
+    fprintf(stderr, "Immediate must fit in signed 21 bits (-1048576 to 1048575)\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
@@ -922,15 +918,13 @@ int consume_syscall(bool* success){
 }
 
 int encode_short_atomic_immediate(long imm, bool* success){
-  // top n bits must all be 0s or all be 1s
-  // the bottom 12 bits become part of the instruction
-  if (imm == (imm & 0xFFF) || ~imm == (~imm & 0xFFF)){
-    return imm & 0xFFF;
+  if (-(1L << 11) <= imm && imm < (1L << 11)){
+    return (int)imm & 0xFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 12 bits\n");
+    fprintf(stderr, "Immediate must fit in signed 12 bits (-2048 to 2047)\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
@@ -938,15 +932,13 @@ int encode_short_atomic_immediate(long imm, bool* success){
 }
 
 int encode_long_atomic_immediate(long imm, bool* success){
-  // top n bits must all be 0s or all be 1s
-  // the bottom 17 bits become part of the instruction
-  if (imm == (imm & 0x1FFFF) || ~imm == (~imm & 0x1FFFF)){
-    return imm & 0x1FFFF;
+  if (-(1L << 16) <= imm && imm < (1L << 16)){
+    return (int)imm & 0x1FFFF;
   } else {
     // can't encode
     print_error();
     fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in 17 bits\n");
+    fprintf(stderr, "Immediate must fit in signed 17 bits (-65536 to 65535)\n");
     fprintf(stderr, "Got %ld\n", imm);
     *success = false;
     return 0;
