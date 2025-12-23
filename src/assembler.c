@@ -1403,7 +1403,6 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("addc")) instruction = consume_alu_op(15, &success);
   else if (consume_keyword("sub")) instruction = consume_alu_op(16, &success);
   else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
-  else if (consume_keyword("mul")) instruction = consume_alu_op(18, &success);
   else if (consume_keyword("cmp")) instruction = consume_cmp(&success);
   else if (consume_keyword("lui")) instruction = consume_lui(&success);
   else if (consume_keyword("swa")) instruction = consume_mem(0, true, false, &success);
