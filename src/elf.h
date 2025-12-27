@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ELF_H
+#define ELF_H
 
 #include <stdint.h>
 #include "instruction_array.h"
@@ -52,3 +53,5 @@ struct ElfProgramHeader create_data_program_header(uint32_t offset, uint32_t vad
 void fprint_elf_header(FILE* ptr, struct ElfHeader* header);
 
 void fprint_pht(FILE* ptr, struct ElfProgramHeader* pht);
+
+#endif  // ELF_H

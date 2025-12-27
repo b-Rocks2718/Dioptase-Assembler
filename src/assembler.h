@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ASSEMBLER_H
+#define ASSEMBLER_H
 
 #include "stdbool.h"
 
@@ -72,3 +73,5 @@ long consume_immediate(enum ConsumeResult* result);
 
 // consumes a single instruction and converts it to binary or hex
 int consume_instruction(enum ConsumeResult* result);
+
+#endif  // ASSEMBLER_H

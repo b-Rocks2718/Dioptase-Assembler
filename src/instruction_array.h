@@ -1,4 +1,5 @@
-#pragma once
+#ifndef INSTRUCTION_ARRAY_H
+#define INSTRUCTION_ARRAY_H
 
 #include <stddef.h>
 #include <stdio.h>
@@ -41,3 +42,5 @@ void print_instruction_array(struct InstructionArray* arr);
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw);
 
 size_t instruction_array_list_size(struct InstructionArrayList* list);
+
+#endif  // INSTRUCTION_ARRAY_H

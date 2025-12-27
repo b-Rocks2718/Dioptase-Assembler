@@ -1,4 +1,5 @@
-#pragma once
+#ifndef SLICE_H
+#define SLICE_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -19,3 +20,5 @@ void print_slice(struct Slice* slice);
 void print_slice_err(struct Slice* slice);
 
 size_t hash_slice(const struct Slice* key);
+
+#endif  // SLICE_H

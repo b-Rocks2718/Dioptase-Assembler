@@ -1,3 +1,5 @@
+#ifndef INTERRUPTS_H
+#define INTERRUPTS_H
 
 struct InterruptEntry {
   char* name;
@@ -7,3 +9,5 @@ struct InterruptEntry {
 extern struct InterruptEntry interrupts[];
 
 extern int NUM_INTERRUPTS;
+
+#endif  // INTERRUPTS_H

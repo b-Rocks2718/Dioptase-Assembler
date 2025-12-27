@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HASHMAP_H
+#define HASHMAP_H
 
 #include <stdint.h>
 
@@ -29,3 +30,5 @@ bool label_has_definition(struct HashMap* hmap, struct Slice* key);
 void destroy_hash_map(struct HashMap* hmap);
 
 void make_defined(struct HashMap* map, struct Slice* key, long value);
+
+#endif  // HASHMAP_H
