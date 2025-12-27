@@ -3,7 +3,7 @@
 
 .define NUM 10
 
-    .kernel
+    .global _start
 _start:
     .fill 0xAAAA5555
     .space 3

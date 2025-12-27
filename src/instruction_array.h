@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdio.h>
+#include <stdbool.h>
 
 struct InstructionArray {
   int origin;
@@ -23,7 +25,7 @@ void destroy_instruction_array_list(struct InstructionArrayList* list);
 
 void print_instruction_array_list(struct InstructionArrayList* list);
 
-void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list);
+void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw);
 
 
 struct InstructionArray* create_instruction_array(size_t capacity, int origin);
@@ -36,4 +38,6 @@ void destroy_instruction_array(struct InstructionArray* arr);
 
 void print_instruction_array(struct InstructionArray* arr);
 
-void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr);
+void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw);
+
+size_t instruction_array_list_size(struct InstructionArrayList* list);

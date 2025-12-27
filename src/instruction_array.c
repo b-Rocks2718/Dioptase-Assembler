@@ -35,8 +35,8 @@ void print_instruction_array_list(struct InstructionArrayList* list){
   print_instruction_array(list->head);
 }
 
-void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list){
-  fprint_instruction_array(ptr, list->head);
+void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw){
+  fprint_instruction_array(ptr, list->head, raw);
 }
 
 /*
@@ -86,10 +86,21 @@ void print_instruction_array(struct InstructionArray* arr){
   if (arr->next != NULL) print_instruction_array(arr->next);
 }
 
-void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr){
-  fprintf(ptr, "@%X\n", arr->origin / 4);
+void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw){
+  // raw => no ELF structure => put origin markers
+  if (raw) fprintf(ptr, "@%X\n", arr->origin / 4);
   for (int i = 0; i < arr->size; ++i){
     fprintf(ptr, "%08X\n", arr->instructions[i]);
   }
-  if (arr->next != NULL) fprint_instruction_array(ptr, arr->next);
+  if (arr->next != NULL) fprint_instruction_array(ptr, arr->next, raw);
+}
+
+size_t instruction_array_list_size(struct InstructionArrayList* list){
+  size_t total_size = 0;
+  struct InstructionArray* curr = list->head;
+  while (curr != NULL){
+    total_size += curr->size;
+    curr = curr->next;
+  }
+  return total_size;
 }

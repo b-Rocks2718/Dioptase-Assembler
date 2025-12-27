@@ -1,6 +1,5 @@
     # test all privileged instructions
-    .kernel
-
+    .global _start
 _start:
     tlbr r1, r2
     tlbw r1, r2

@@ -1,2 +1,11 @@
-#label _start 0000000C
-#label loop 00000010
+#label _start 80000000
+#label text_loop 80000008
+#label mid_text 8000000C
+#label const_a 80001000
+#label const_b 80001004
+#label after_ro 80000010
+#label data_a 80002000
+#label data_b 80002004
+#label after_data 80000014
+#label bss_a 8000200C
+#label done 80000018

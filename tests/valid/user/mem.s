@@ -1,4 +1,7 @@
     # test addressing modes and increment types
+    .text
+
+    .global _start
 _start:
     # absolute addressing
     lwa r1, [r2]        # no offset  
@@ -22,6 +25,9 @@ _start:
     sb  r1, [r2, -4]
     lba r1, [r2], 0x3FF8
     sb  r0, [VAR]       # immediate
+
+    
+    .data
 
 VAR:
     .fill 21

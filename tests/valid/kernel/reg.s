@@ -1,6 +1,5 @@
-  .kernel
   # test all register aliases
-
+  .global _start
 _start:
   # user mode aliases
   and r0, r0, sp

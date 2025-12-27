@@ -9,35 +9,7 @@
 #include "instruction_array.h"
 #include "label_list.h"
 #include "preprocessor.h"
-
-static bool ends_with(const char* str, const char* suffix) {
-  size_t str_len = strlen(str);
-  size_t suffix_len = strlen(suffix);
-  if (str_len < suffix_len) return false;
-  return strncmp(str + (str_len - suffix_len), suffix, suffix_len) == 0;
-}
-
-// Build output filename for debug mode: replace/append .debug, or return NULL if already .debug.
-static char* build_debug_name(const char* name) {
-  const char* debug_ext = ".debug";
-  const char* hex_ext = ".hex";
-  size_t name_len = strlen(name);
-  if (ends_with(name, debug_ext)) {
-    return NULL;
-  }
-  if (ends_with(name, hex_ext)) {
-    size_t base_len = name_len - strlen(hex_ext);
-    char* out = malloc(base_len + strlen(debug_ext) + 1);
-    memcpy(out, name, base_len);
-    memcpy(out + base_len, debug_ext, strlen(debug_ext) + 1);
-    return out;
-  }
-
-  char* out = malloc(name_len + strlen(debug_ext) + 1);
-  memcpy(out, name, name_len);
-  memcpy(out + name_len, debug_ext, strlen(debug_ext) + 1);
-  return out;
-}
+#include "elf.h"
 
 int main(int argc, const char *const *const argv){
   if (argc <= 0) {
@@ -53,8 +25,10 @@ int main(int argc, const char *const *const argv){
 
   // look for flags
   bool pre_only = false;
-  bool has_start = true;
+  bool is_kernel = false;
   bool debug_labels = false;
+  const char** cli_defines = malloc(argc * sizeof(char*));
+  int num_defines = 0;
   for (int i = 1; i < argc; ++i){
     if (strcmp(argv[i], "-pre") == 0){
       pre_only = true;
@@ -67,13 +41,23 @@ int main(int argc, const char *const *const argv){
       }
       target_name = argv[i + 1];
       ++i;
-    } else if (strcmp(argv[i], "-nostart") == 0){
-      has_start = false;
+    } else if (strcmp(argv[i], "-kernel") == 0){
+      is_kernel = true;
     } else if (strcmp(argv[i], "-debug") == 0){
       debug_labels = true;
+    } else if (strncmp(argv[i], "-D", 2) == 0){
+      const char* def = argv[i] + 2;
+      if (def[0] == '\0' || strchr(def, '=') == NULL){
+        fprintf(stderr, "Invalid -D definition (expected -DNAME=value)\n");
+        free(file_names);
+        free(cli_defines);
+        exit(1);
+      }
+      cli_defines[num_defines++] = def;
     } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -nostart, or -debug\n", argv[i]);
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -debug, or -DNAME=value\n", argv[i]);
       free(file_names);
+      free(cli_defines);
       exit(1);
     } else {
       // this is a file, record the index
@@ -85,14 +69,6 @@ int main(int argc, const char *const *const argv){
   if (num_files <= 0) {
     fprintf(stderr,"Must pass at least one source file\n");
     exit(1);
-  }
-
-  // Debug output uses a .debug extension so the emulator can parse labels.
-  if (debug_labels) {
-    target_name_alloc = build_debug_name(target_name);
-    if (target_name_alloc != NULL) {
-      target_name = target_name_alloc;
-    }
   }
 
   char const** const files = malloc(num_files * sizeof(char**));
@@ -130,10 +106,11 @@ int main(int argc, const char *const *const argv){
     files[i] = src;
   }
 
-  char** preprocessed = preprocess(num_files, file_names, has_start, argv, files);
+  char** preprocessed = preprocess(num_files, file_names, is_kernel, argv, files);
   if (preprocessed == NULL) {
     free(file_names);
     free(files);
+    free(cli_defines);
     return 1;
   }
 
@@ -144,13 +121,16 @@ int main(int argc, const char *const *const argv){
     free(files);
     for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
     free(preprocessed);
+    free(cli_defines);
     return 0;
   }
 
+  set_cli_defines(num_defines, cli_defines);
   struct LabelList* labels = NULL;
-  struct InstructionArrayList* instructions = assemble(
+  struct ProgramDescriptor* program = assemble(
     num_files,
     file_names,
+    is_kernel,
     argv,
     preprocessed,
     debug_labels ? &labels : NULL
@@ -160,8 +140,9 @@ int main(int argc, const char *const *const argv){
   free(preprocessed);
   free(file_names);
   free(files);
+  free(cli_defines);
 
-  if (instructions == NULL) {
+  if (program == NULL) {
     if (target_name_alloc != NULL) free(target_name_alloc);
     return 1;
   }
@@ -174,7 +155,28 @@ int main(int argc, const char *const *const argv){
     exit(1);             
   }
 
-  fprint_instruction_array_list(fptr, instructions);
+  if (is_kernel) {
+    // write raw instructions without ELF structure
+    fprint_instruction_array_list(fptr, program->sections, true);
+
+    destroy_program_descriptor(program);
+  } else {
+    // write elf header
+    struct ElfHeader header = create_elf_header(program);
+    fprint_elf_header(fptr, &header);
+
+    // write program header table
+    struct ElfProgramHeader* pht = create_PHT(program);
+    fprint_pht(fptr, pht);
+    free(pht);
+
+    // write program data
+    fprint_instruction_array_list(fptr, program->sections, false);
+
+    destroy_program_descriptor(program);
+  }
+
+  
   // Append label metadata for the debugger.
   if (debug_labels){
     fprint_label_list(fptr, labels);
@@ -182,7 +184,6 @@ int main(int argc, const char *const *const argv){
   }
 
   fclose(fptr);
-  destroy_instruction_array_list(instructions);
   if (target_name_alloc != NULL) {
     free(target_name_alloc);
   }

@@ -10,20 +10,25 @@ CFLAGS    := -Wall -g
 # Sources and objects
 SRCS      := $(wildcard $(SRC_DIR)/*.c)
 OBJFILES  := $(patsubst %.c,$(BUILD_DIR)/%.o, $(notdir $(SRCS)))
-EXEC      := $(BIN_DIR)/assembler
+EXEC      := $(BIN_DIR)/basm
 
-TEST_OKS := $(wildcard tests/valid/*.ok)
-VALID_TESTS    := $(patsubst tests/valid/%.ok,%, $(TEST_OKS))
+# Tests
+USER_OKS := $(wildcard tests/valid/user/*.ok)
+KERNEL_OKS := $(wildcard tests/valid/kernel/*.ok)
+VALID_USER_TESTS := $(patsubst tests/valid/user/%.ok,%, $(USER_OKS))
+VALID_KERNEL_TESTS := $(patsubst tests/valid/kernel/%.ok,%, $(KERNEL_OKS))
+USER_LIB_OKS := $(wildcard tests/valid/user/lib/*.ok)
+KERNEL_LIB_OKS := $(wildcard tests/valid/kernel/lib/*.ok)
+VALID_USER_LIB_TESTS := $(patsubst tests/valid/user/lib/%.ok,%, $(USER_LIB_OKS))
+VALID_KERNEL_LIB_TESTS := $(patsubst tests/valid/kernel/lib/%.ok,%, $(KERNEL_LIB_OKS))
 
 INVALID_SRCS := $(wildcard tests/invalid/*.s)
-INVALID_TESTS:= $(patsubst tests/invalid/%.s,%, $(INVALID_SRCS))
+INVALID_TESTS := $(patsubst tests/invalid/%.s,%, $(INVALID_SRCS))
 
 DEBUG_SRCS := $(wildcard tests/debug/*.s)
-DEBUG_TESTS:= $(patsubst tests/debug/%.s,%, $(DEBUG_SRCS))
+DEBUG_TESTS := $(patsubst tests/debug/%.s,%, $(DEBUG_SRCS))
 
-TOTAL := $(words $(VALID_TESTS)) $(words $(INVALID_TESTS)) $(words $(DEBUG_TESTS))
-
-.PRECIOUS: tests/valid/%.hex
+.PRECIOUS: tests/valid/user/%.hex tests/valid/kernel/%.hex tests/valid/user/lib/%.hex tests/valid/kernel/lib/%.hex
 
 # Link
 all: $(EXEC)
@@ -36,48 +41,38 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # for each test/NAME.s, produce test/NAME.hex
-tests/valid/%.hex: tests/valid/%.s $(EXEC) | dirs
-	@echo "Assembling tests/vaid/$*.s -> tests/valid/$*.hex"
+tests/valid/user/%.hex: tests/valid/user/%.s $(EXEC) | dirs
+	@echo "Assembling tests/valid/user/$*.s -> tests/valid/user/$*.hex"
 	@$(EXEC) $< -o $@
 
-tests/valid/lib/main.hex: tests/valid/lib/main.s tests/valid/lib/lib.s $(EXEC) | dirs
-	@echo "Assembling tests/valid/lib/main$*.s -> tests/valid/lib/main.hex"
-	@$(EXEC) tests/valid/lib/lib.s tests/valid/lib/main.s -o tests/valid/lib/main.hex
+tests/valid/kernel/%.hex: tests/valid/kernel/%.s $(EXEC) | dirs
+	@echo "Assembling tests/valid/kernel/$*.s -> tests/valid/kernel/$*.hex"
+	@flags="-kernel"; \
+	if [ "$*" = "macro" ]; then \
+	  flags="$$flags -DBIG=0xAAAA5555 -DONE=1"; \
+	fi; \
+	$(EXEC) $$flags $< -o $@
 
-# test linking multiple files
-valid_lib.test: tests/valid/lib/main.hex tests/valid/lib/main.ok
-	@echo "Running test"
-	@{ \
-	  if cmp --silent tests/valid/lib/main.hex tests/valid/lib/main.ok; then \
-	    echo "	PASS"; \
-	  else \
-	    echo "	FAIL"; \
-	  fi \
-	}
+tests/valid/user/lib/%.hex: tests/valid/user/lib/%.s tests/valid/user/lib/lib.s $(EXEC) | dirs
+	@echo "Assembling tests/valid/user/lib/$*.s -> tests/valid/user/lib/$*.hex"
+	@$(EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$*.s -o $@
 
-# NAME.test will depend on having both .hex and .ok
-%.test: tests/valid/%.hex tests/valid/%.ok tests/valid/lib/main.hex tests/valid/lib/main.ok
-	@echo "Running test: $*"
-	@{ \
-	  if cmp --silent tests/valid/$*.hex tests/valid/$*.ok; then \
-	    echo "	PASS: $*"; \
-	  else \
-	    echo "	FAIL: $*"; \
-	  fi \
-	}
+tests/valid/kernel/lib/%.hex: tests/valid/kernel/lib/%.s tests/valid/kernel/lib/lib.s $(EXEC) | dirs
+	@echo "Assembling tests/valid/kernel/lib/$*.s -> tests/valid/kernel/lib/$*.hex"
+	@$(EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$*.s -o $@
 
-# `make test` will expand to NAME.test for every NAME in VALID_TESTS
+# Run the test suite.
 test: dirs $(EXEC)
 	@GREEN="\033[0;32m"; \
 	RED="\033[0;31m"; \
 	YELLOW="\033[0;33m"; \
 	NC="\033[0m"; \
-	passed=0; total=$$(( $(words $(VALID_TESTS)) + $(words $(INVALID_TESTS)) + $(words $(DEBUG_TESTS)) + 2)); \
-	echo "Running $(words $(VALID_TESTS) x) valid tests:"; \
-	for t in $(VALID_TESTS); do \
+	passed=0; total=$$(( $(words $(VALID_USER_TESTS)) + $(words $(VALID_KERNEL_TESTS)) + $(words $(VALID_USER_LIB_TESTS)) + $(words $(VALID_KERNEL_LIB_TESTS)) + $(words $(INVALID_TESTS)) + $(words $(DEBUG_TESTS)) + 1)); \
+	echo "Running $(words $(VALID_USER_TESTS)) user tests:"; \
+	for t in $(VALID_USER_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  if timeout 1s $(EXEC) tests/valid/$$t.s -o tests/valid/$$t.hex >/dev/null 2>&1; then \
-	    if cmp --silent tests/valid/$$t.hex tests/valid/$$t.ok; then \
+	  if timeout 1s $(EXEC) tests/valid/user/$$t.s -o tests/valid/user/$$t.hex >/dev/null 2>&1; then \
+	    if cmp --silent tests/valid/user/$$t.hex tests/valid/user/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
 	      echo "$$RED FAIL $$NC"; \
@@ -90,21 +85,62 @@ test: dirs $(EXEC)
 	    fi; \
 	  fi; \
 	done; \
-	printf "%s %-20s " '-' "lib"; \
-	if timeout 1s $(EXEC) tests/valid/lib/main.s tests/valid/lib/lib.s -o tests/valid/lib/main.hex >/dev/null 2>&1; then \
-	  if cmp --silent tests/valid/lib/main.hex tests/valid/lib/main.ok; then \
-	    echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	echo "\nRunning $(words $(VALID_USER_LIB_TESTS)) user lib tests:"; \
+	for t in $(VALID_USER_LIB_TESTS); do \
+	  printf "%s %-20s " '-' "$$t"; \
+	  if timeout 1s $(EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$$t.s -o tests/valid/user/lib/$$t.hex >/dev/null 2>&1; then \
+	    if cmp --silent tests/valid/user/lib/$$t.hex tests/valid/user/lib/$$t.ok; then \
+	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
 	  else \
-	    echo "$$RED FAIL $$NC"; \
+	    if [ $$? -eq 124 ]; then \
+	      echo "$$YELLOW TIMEOUT $$NC"; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
 	  fi; \
-	else \
-	  if [ $$? -eq 124 ]; then \
-	    echo "$$YELLOW TIMEOUT $$NC"; \
+	done; \
+	echo "\nRunning $(words $(VALID_KERNEL_TESTS)) kernel tests:"; \
+	for t in $(VALID_KERNEL_TESTS); do \
+	  printf "%s %-20s " '-' "$$t"; \
+	  kernel_flags="-kernel"; \
+	  case "$$t" in \
+	    macro) kernel_flags="$$kernel_flags -DBIG=0xAAAA5555 -DONE=1";; \
+	  esac; \
+	  if timeout 1s $(EXEC) $$kernel_flags tests/valid/kernel/$$t.s -o tests/valid/kernel/$$t.hex >/dev/null 2>&1; then \
+	    if cmp --silent tests/valid/kernel/$$t.hex tests/valid/kernel/$$t.ok; then \
+	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
 	  else \
-	    echo "$$RED FAIL $$NC"; \
+	    if [ $$? -eq 124 ]; then \
+	      echo "$$YELLOW TIMEOUT $$NC"; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
 	  fi; \
-	fi;\
-	echo "\nRunning $(words $(INVALID_TESTS) x) invalid tests:"; \
+	done; \
+	echo "\nRunning $(words $(VALID_KERNEL_LIB_TESTS)) kernel lib tests:"; \
+	for t in $(VALID_KERNEL_LIB_TESTS); do \
+	  printf "%s %-20s " '-' "$$t"; \
+	  if timeout 1s $(EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$$t.s -o tests/valid/kernel/lib/$$t.hex >/dev/null 2>&1; then \
+	    if cmp --silent tests/valid/kernel/lib/$$t.hex tests/valid/kernel/lib/$$t.ok; then \
+	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  else \
+	    if [ $$? -eq 124 ]; then \
+	      echo "$$YELLOW TIMEOUT $$NC"; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  fi; \
+	done; \
+	echo "\nRunning $(words $(INVALID_TESTS)) invalid tests:"; \
 	for t in $(INVALID_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
 	  if timeout 1s $(EXEC) tests/invalid/$$t.s -o tests/invalid/$$t.hex >/dev/null 2>&1; then \
@@ -131,11 +167,15 @@ test: dirs $(EXEC)
 	    echo "$$RED FAIL $$NC"; \
 	  fi; \
 	fi; \
-	echo "\nRunning $(words $(DEBUG_TESTS) x) debug label tests:"; \
+	echo "\nRunning $(words $(DEBUG_TESTS)) debug label tests:"; \
 	for t in $(DEBUG_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  rm -f tests/debug/$$t.debug tests/debug/$$t.hex; \
-	  if timeout 1s $(EXEC) -debug tests/debug/$$t.s -o tests/debug/$$t.hex >/dev/null 2>&1; then \
+	  rm -f tests/debug/$$t.debug; \
+	  debug_flags="-debug"; \
+	  case "$$t" in \
+	    *_kernel) debug_flags="-debug -kernel";; \
+	  esac; \
+	  if timeout 1s $(EXEC) $$debug_flags tests/debug/$$t.s -o tests/debug/$$t.debug >/dev/null 2>&1; then \
 	    if [ -f tests/debug/$$t.debug ]; then \
 	      ok=1; \
 	      if [ -f tests/debug/$$t.labels ]; then \
@@ -186,9 +226,11 @@ dirs:
 .PHONY: clean
 clean:
 	rm -rf $(BUILD_DIR)
-	rm -f tests/valid/*.hex
+	rm -f tests/valid/user/*.hex
+	rm -f tests/valid/user/lib/*.hex
+	rm -f tests/valid/kernel/*.hex
+	rm -f tests/valid/kernel/lib/*.hex
 	rm -f tests/invalid/*.hex
-	rm -f tests/valid/lib/*.hex
 	rm -f tests/invalid/lib/*.hex
 	rm -f tests/debug/*.debug
 	rm -f tests/debug/*.hex

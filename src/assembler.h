@@ -4,6 +4,7 @@
 
 extern char const * current_file;
 extern char const * current;
+extern char const * current_buffer_start;
 extern unsigned line_count;
 extern unsigned long pc;
 
@@ -12,13 +13,22 @@ extern bool is_kernel;
 
 struct LabelList;
 
-struct InstructionArrayList* assemble(int num_files, int* file_names, 
+struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kernel,
   const char *const *const argv, char** files, struct LabelList** labels_out);
+
+void set_cli_defines(int count, const char* const* defines);
 
 enum ConsumeResult {
   ERROR,
   NOT_FOUND,
   FOUND
+};
+
+enum UserSection {
+  TEXT_SECTION = 0,
+  RODATA_SECTION = 1,
+  DATA_SECTION = 2,
+  BSS_SECTION = 3,
 };
 
 // print line causing an error

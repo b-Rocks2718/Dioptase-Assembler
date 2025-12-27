@@ -13,6 +13,7 @@
 #include "label_list.h"
 #include "preprocessor.h"
 #include "interrupts.h"
+#include "elf.h"
 
 /*
   Two-pass assembler.
@@ -21,8 +22,20 @@
 */
 
 char const * current;
+char const * current_buffer_start = NULL;
 unsigned line_count = 1;
 unsigned long pc = 0;
+unsigned entry_point = 0;
+
+// used by user programs
+enum UserSection current_section = -1;
+struct InstructionArray* text_instruction_array = NULL;
+struct InstructionArray* rodata_instruction_array = NULL;
+struct InstructionArray* data_instruction_array = NULL;
+unsigned bss_size = 0;
+static uint32_t section_offsets[4];
+static uint32_t section_sizes[4];
+static uint32_t section_bases[4];
 
 // does the file wish to use pivileges instructions?
 bool is_kernel = false;
@@ -35,9 +48,138 @@ int pass_number = 1;
 static struct HashMap** local_labels;
 static struct HashMap** local_defines;
 static struct HashMap* global_labels;
+static int cli_define_count = 0;
+static const char* const* cli_defines = NULL;
+
+#define USER_BASE_ADDR 0x80000000u
+#define SECTION_ALIGN 0x1000u
+
+static void reset_section_offsets(void) {
+  for (int i = 0; i < 4; ++i) section_offsets[i] = 0;
+}
+
+static uint32_t align_up(uint32_t value, uint32_t align) {
+  uint32_t rem = value % align;
+  if (rem == 0) return value;
+  return value + (align - rem);
+}
+
+static void compute_section_bases(void) {
+  section_bases[TEXT_SECTION] = USER_BASE_ADDR;
+  section_bases[RODATA_SECTION] = align_up(section_bases[TEXT_SECTION] + section_sizes[TEXT_SECTION], SECTION_ALIGN);
+  section_bases[DATA_SECTION] = align_up(section_bases[RODATA_SECTION] + section_sizes[RODATA_SECTION], SECTION_ALIGN);
+  section_bases[BSS_SECTION] = section_bases[DATA_SECTION] + section_sizes[DATA_SECTION];
+}
+
+static uint64_t encode_section_offset(enum UserSection section, uint32_t offset) {
+  return ((uint64_t)section << 32) | offset;
+}
+
+static void adjust_label_map_for_sections(struct HashMap* map) {
+  for (size_t i = 0; i < map->size; ++i){
+    struct HashEntry* entry = map->arr[i];
+    while (entry != NULL){
+      if (entry->is_defined){
+        uint64_t raw = (uint64_t)entry->value;
+        enum UserSection section = (enum UserSection)(raw >> 32);
+        uint32_t offset = (uint32_t)(raw & 0xFFFFFFFFu);
+        entry->value = (long)(section_bases[section] + offset);
+      }
+      entry = entry->next;
+    }
+  }
+}
+
+static bool ensure_valid_section(const char* context) {
+  if ((int)current_section < (int)TEXT_SECTION) {
+    print_error();
+    if (strcmp(context, "label") == 0) {
+      fprintf(stderr, "Label defined while not in any section\n");
+    } else if (strcmp(context, "instruction") == 0) {
+      fprintf(stderr, "cannot use instructions while not in any section\n");
+    } else {
+      fprintf(stderr, "cannot use %s while not in any section\n", context);
+    }
+    return false;
+  }
+  if ((int)current_section > (int)BSS_SECTION) {
+    print_error();
+    fprintf(stderr, "Invalid section for %s\n", context);
+    return false;
+  }
+  return true;
+}
 
 static bool is_identifier_char(char c) {
   return isalnum((unsigned char)c) || c == '_' || c == '.';
+}
+
+static bool is_valid_define_name(const char* start, size_t len) {
+  if (len == 0) return false;
+  if (!isalpha((unsigned char)start[0]) && start[0] != '_') return false;
+  for (size_t i = 1; i < len; ++i){
+    if (!is_identifier_char(start[i])) return false;
+  }
+  return true;
+}
+
+void set_cli_defines(int count, const char* const* defines){
+  cli_define_count = count;
+  cli_defines = defines;
+}
+
+static bool apply_cli_defines(void){
+  if (cli_define_count <= 0) return true;
+  for (int i = 0; i < cli_define_count; ++i){
+    const char* def = cli_defines[i];
+    const char* eq = strchr(def, '=');
+    if (eq == NULL || eq == def || *(eq + 1) == '\0'){
+      fprintf(stderr, "Invalid -D definition: %s\n", def);
+      return false;
+    }
+    size_t name_len = (size_t)(eq - def);
+    if (!is_valid_define_name(def, name_len)){
+      fprintf(stderr, "Invalid -D name: %.*s\n", (int)name_len, def);
+      return false;
+    }
+
+    struct Slice name_view = {def, name_len};
+    if (hash_map_contains(local_defines[current_file_index], &name_view)){
+      fprintf(stderr, "constant has multiple definitions\n");
+      return false;
+    }
+
+    const char* old_current = current;
+    const char* old_buffer = current_buffer_start;
+    unsigned old_line = line_count;
+    const char* old_file = current_file;
+
+    current = eq + 1;
+    current_buffer_start = current;
+    line_count = 1;
+    current_file = "<command line>";
+
+    enum ConsumeResult result;
+    long value = consume_literal(&result);
+    skip();
+    bool ok = (result == FOUND) && (*current == '\0');
+
+    current = old_current;
+    current_buffer_start = old_buffer;
+    line_count = old_line;
+    current_file = old_file;
+
+    if (!ok){
+      fprintf(stderr, "Invalid -D value for %.*s\n", (int)name_len, def);
+      return false;
+    }
+
+    struct Slice* label = malloc(sizeof(struct Slice));
+    label->start = def;
+    label->len = name_len;
+    hash_map_insert(local_defines[current_file_index], label, value, true);
+  }
+  return true;
 }
 
 static bool consume_named_register(const char* name) {
@@ -59,7 +201,8 @@ void print_error(void) {
     
     // get start and end of line
     char const * start = current;
-    while (*(start - 1) != '\0' && *(start - 1) != '\n') start--;
+    char const * buffer_start = current_buffer_start != NULL ? current_buffer_start : current;
+    while (start > buffer_start && *(start - 1) != '\0' && *(start - 1) != '\n') start--;
     char const * end = current;
     while (*end != '\0' && *end != '\n') end++;
     
@@ -73,6 +216,24 @@ void print_error(void) {
     fprintf(stderr, "\"\n");
     has_printed = true;
   }
+}
+
+static void print_warning(const char* message) {
+  fprintf(stderr, "Warning in %s\nline %u: \"", current_file, line_count);
+
+  char const * start = current;
+  char const * buffer_start = current_buffer_start != NULL ? current_buffer_start : current;
+  while (start > buffer_start && *(start - 1) != '\0' && *(start - 1) != '\n') start--;
+  char const * end = current;
+  while (*end != '\0' && *end != '\n') end++;
+
+  while (isspace(*start)) start++;
+  while (end > start && isspace(*(end - 1))) end--;
+
+  struct Slice unrecognized = {start, end - start};
+  print_slice_err(&unrecognized);
+  fprintf(stderr, "\"\n");
+  fprintf(stderr, "%s\n", message);
 }
 
 // is the rest of the file just whitespace?
@@ -1044,14 +1205,14 @@ int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
 
 void check_privileges(bool* success){
   static bool has_printed = false;
-  // Privileged instructions require a .kernel directive in the program.
+  // Privileged instructions require -kernel flag
   if (!is_kernel){
     *success = false;
     if (!has_printed){
       has_printed = true;
       print_error();
       fprintf(stderr, "Used privileged instruction\n");
-      fprintf(stderr, "Put .kernel somewhere in the file if this was intentional\n");
+      fprintf(stderr, "Run assembler with -kernel if this was intentional\n");
     }
   }
 }
@@ -1487,16 +1648,26 @@ int consume_instruction(enum ConsumeResult* result){
 // first pass, find all the labels and their addresses
 bool process_labels(char const* const prog){
   current = prog;
+  current_buffer_start = prog - 1;
   line_count = 0;
 
   local_labels[current_file_index] = create_hash_map(1000);
   local_defines[current_file_index] = create_hash_map(1000);
+  if (!apply_cli_defines()) return false;
 
   while (!is_at_end()){
 
     struct Slice* label = consume_label();
     if (label != NULL) {
       bool label_was_used = false;
+      long label_value = pc;
+      if (!is_kernel){
+        if (!ensure_valid_section("label")) {
+          free(label);
+          return false;
+        }
+        label_value = (long)encode_section_offset(current_section, section_offsets[current_section]);
+      }
 
       // check for duplicates 
       if (hash_map_contains(local_labels[current_file_index], label)){
@@ -1507,10 +1678,10 @@ bool process_labels(char const* const prog){
           free(label);
           return false;
         } else {
-          make_defined(local_labels[current_file_index], label, pc);
+          make_defined(local_labels[current_file_index], label, label_value);
         }
       } else {
-        hash_map_insert(local_labels[current_file_index], label, pc, true);
+        hash_map_insert(local_labels[current_file_index], label, label_value, true);
         label_was_used = true;
       }
 
@@ -1523,7 +1694,7 @@ bool process_labels(char const* const prog){
           if (!label_was_used) free(label);
           return false;
         } else {
-          make_defined(global_labels, label, pc);
+          make_defined(global_labels, label, label_value);
         }
       }
 
@@ -1531,10 +1702,7 @@ bool process_labels(char const* const prog){
 
     } else {
       skip();
-      if (consume_keyword(".kernel")) {
-        is_kernel = true;
-        continue;
-      } else if (consume_keyword(".global")) {
+      if (consume_keyword(".global")) {
         struct Slice* label = consume_identifier();
         bool label_used = false;
         if (label != NULL){
@@ -1567,6 +1735,12 @@ bool process_labels(char const* const prog){
 
         continue;
       } else if (consume_keyword(".origin")) { 
+        if (!is_kernel){
+          print_error();
+          fprintf(stderr, ".origin can only be used in kernel mode\n");
+          return false;
+        }
+
         enum ConsumeResult result; 
         long imm = consume_literal(&result);
         if (result != FOUND){
@@ -1583,7 +1757,47 @@ bool process_labels(char const* const prog){
           fprintf(stderr, ".origin address must be a 32 bit integer\n");
           return false;
         }
-        pc = is_kernel ? imm - 0x400 : imm;
+        pc = imm - 0x400; // account for kernel offset
+        continue;
+      }
+      else if (consume_keyword(".text")) {
+        if (is_kernel){
+          print_error();
+          fprintf(stderr, ".text can only be used in user mode\n");
+          return false;
+        }
+        current_section = TEXT_SECTION;
+        pc = section_offsets[current_section];
+        continue;
+      }
+      else if (consume_keyword(".rodata")) {
+        if (is_kernel){
+          print_error();
+          fprintf(stderr, ".rodata can only be used in user mode\n");
+          return false;
+        }
+        current_section = RODATA_SECTION;
+        pc = section_offsets[current_section];
+        continue;
+      }
+      else if (consume_keyword(".data")) {
+        if (is_kernel){
+          print_error();
+          fprintf(stderr, ".data can only be used in user mode\n");
+          return false;
+        }
+        current_section = DATA_SECTION;
+        pc = section_offsets[current_section];
+        continue;
+      }
+      else if (consume_keyword(".bss")) {
+        if (is_kernel){
+          print_error();
+          fprintf(stderr, ".bss can only be used in user mode\n");
+          return false;
+        }
+        current_section = BSS_SECTION;
+        pc = section_offsets[current_section];
         continue;
       }
       else if (consume_keyword(".fill")) {
@@ -1594,7 +1808,18 @@ bool process_labels(char const* const prog){
           if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
           return false;
         }
-        pc += 4;
+        if (is_kernel){
+          pc += 4;
+        } else {
+          if (!ensure_valid_section(".fill")) return false;
+          if (current_section == BSS_SECTION){
+            print_error();
+            fprintf(stderr, ".fill not allowed in .bss section\n");
+            return false;
+          }
+          section_offsets[current_section] += 4;
+          pc = section_offsets[current_section];
+        }
         continue;
       }
       else if (consume_keyword(".space")) { 
@@ -1605,7 +1830,13 @@ bool process_labels(char const* const prog){
           if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
           return false;
         }
-        pc += imm * 4;
+        if (is_kernel){
+          pc += imm * 4;
+        } else {
+          if (!ensure_valid_section(".space")) return false;
+          section_offsets[current_section] += imm * 4;
+          pc = section_offsets[current_section];
+        }
         continue;
       } else if (consume_keyword(".define")) {
         bool success = true;
@@ -1615,12 +1846,25 @@ bool process_labels(char const* const prog){
       }
       
       enum ConsumeResult result = FOUND;
+      if (!is_kernel){
+        if (!ensure_valid_section("instruction")) return false;
+        if (current_section == BSS_SECTION){
+          print_error();
+          fprintf(stderr, "Instructions not allowed in .bss section\n");
+          return false;
+        }
+      }
       consume_instruction(&result);
-      pc += 4;
       if (result != FOUND) {
         print_error();
         fprintf(stderr, "Unrecognized instruction\n");
         return false;
+      }
+      if (is_kernel){
+        pc += 4;
+      } else {
+        section_offsets[current_section] += 4;
+        pc = section_offsets[current_section];
       }
     }
   }
@@ -1630,6 +1874,7 @@ bool process_labels(char const* const prog){
 // second pass, convert to binary
 bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
+  current_buffer_start = prog - 1;
   line_count = 0;
 
   enum ConsumeResult success = FOUND;
@@ -1648,39 +1893,90 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     // directives
     if (consume_keyword(".global")) {
       // handled in first pass
-
-      // ensure the first pass didn't miss anything
       struct Slice* name = consume_identifier();
-      assert(name);
-      assert(hash_map_contains(local_labels[current_file_index], name));
-      assert(hash_map_contains(global_labels, name));
+      if (name == NULL){
+        print_error();
+        fprintf(stderr, ".global directive requires a label\n");
+        return false;
+      }
+      if (!hash_map_contains(local_labels[current_file_index], name)
+          || !hash_map_contains(global_labels, name)){
+        print_error();
+        fprintf(stderr, "Global label \"");
+        print_slice_err(name);
+        fprintf(stderr, "\" missing from first pass\n");
+        free(name);
+        return false;
+      }
       free(name);
     }
-    else if (consume_keyword(".kernel")); // handled in first pass
     else if (consume_keyword(".define")){
       skip_line();
     } // handled in first pass
     else if (consume_keyword(".origin")) { 
-      enum ConsumeResult result; 
-      long imm = consume_literal(&result);
-      if (result != FOUND){
-        print_error();
-        fprintf(stderr, "\n");
-        return false;
-      }
-      if (imm < pc){
-        print_error();
-        fprintf(stderr, ".origin cannot be used to go backwards\n");
-        return false;
-      } else if (imm >= ((long)1 << 32)){
-        print_error();
-        fprintf(stderr, ".origin address must be a 32 bit integer\n");
-        return false;
+      if (is_kernel){
+        // create a new section
+        enum ConsumeResult result; 
+        long imm = consume_literal(&result);
+        if (result != FOUND){
+          print_error();
+          fprintf(stderr, "\n");
+          return false;
+        }
+        if (imm < pc){
+          print_error();
+          fprintf(stderr, ".origin cannot be used to go backwards\n");
+          return false;
+        } else if (imm >= ((long)1 << 32)){
+          print_error();
+          fprintf(stderr, ".origin address must be a 32 bit integer\n");
+          return false;
+        } else {
+          struct InstructionArray* arr = create_instruction_array(10, imm);
+          instruction_array_list_append(instructions, arr);
+        }
+        pc = imm;
       } else {
-        struct InstructionArray* arr = create_instruction_array(10, imm);
-        instruction_array_list_append(instructions, arr);
+        print_error();
+        fprintf(stderr, ".origin can only be used in kernel mode\n");
+        return false;
       }
-      pc = imm;
+    }
+    else if (consume_keyword(".text")) {
+      if (is_kernel){
+        print_error();
+        fprintf(stderr, ".text can only be used in user mode\n");
+        return false;
+      }
+      current_section = TEXT_SECTION;
+      pc = section_bases[current_section] + section_offsets[current_section];
+    }
+    else if (consume_keyword(".rodata")) {
+      if (is_kernel){
+        print_error();
+        fprintf(stderr, ".rodata can only be used in user mode\n");
+        return false;
+      }
+      current_section = RODATA_SECTION;
+      pc = section_bases[current_section] + section_offsets[current_section];
+    }
+    else if (consume_keyword(".data")) {
+      if (is_kernel){
+        print_error();
+        fprintf(stderr, ".data can only be used in user mode\n");
+        return false;
+      }
+      current_section = DATA_SECTION;
+      pc = section_bases[current_section] + section_offsets[current_section];
+    }
+    else if (consume_keyword(".bss")) {
+      if (is_kernel){
+        print_error();
+        fprintf(stderr, ".bss can only be used in user mode\n");
+        return false;
+      }
+      current_section = BSS_SECTION;
+      pc = section_bases[current_section] + section_offsets[current_section];
     }
     else if (consume_keyword(".fill")) {
       enum ConsumeResult result; 
@@ -1691,13 +1987,41 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
-        instruction_array_append(instructions->tail, imm);
+        if (is_kernel){
+          instruction_array_append(instructions->tail, imm);
+          pc += 4;
+        } else {
+          if (!ensure_valid_section(".fill")) return false;
+          if (current_section == TEXT_SECTION){
+            print_warning(".fill used in .text section");
+          }
+          switch (current_section) {
+            case TEXT_SECTION:
+              instruction_array_append(text_instruction_array, imm);
+              break;
+            case RODATA_SECTION:
+              instruction_array_append(rodata_instruction_array, imm);
+              break;
+            case DATA_SECTION:
+              instruction_array_append(data_instruction_array, imm);
+              break;
+            case BSS_SECTION:
+              print_error();
+              fprintf(stderr, ".fill not allowed in .bss section\n");
+              return false;
+            default:
+              print_error();
+              fprintf(stderr, "cannot use .fill before specifying a section\n");
+              return false;
+          }
+          section_offsets[current_section] += 4;
+          pc = section_bases[current_section] + section_offsets[current_section];
+        }
       } else {
         print_error();
         fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
         return false;
       }
-      pc += 4;
     }
     else if (consume_keyword(".space")) { 
       enum ConsumeResult result; 
@@ -1708,19 +2032,80 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
-        for (int i = 0; i < imm; ++i) 
-          instruction_array_append(instructions->tail, 0);
+        if (is_kernel){
+          for (int i = 0; i < imm; ++i) 
+            instruction_array_append(instructions->tail, 0);
+          pc += imm * 4;
+        } else {
+          if (!ensure_valid_section(".space")) return false;
+          switch (current_section) {
+            case TEXT_SECTION:
+              for (int i = 0; i < imm; ++i) 
+                instruction_array_append(text_instruction_array, 0);
+              break;
+            case RODATA_SECTION:
+              for (int i = 0; i < imm; ++i) 
+                instruction_array_append(rodata_instruction_array, 0);
+              break;
+            case DATA_SECTION:
+              for (int i = 0; i < imm; ++i) 
+                instruction_array_append(data_instruction_array, 0);
+              break;
+            case BSS_SECTION:
+              bss_size += imm;
+              break;
+            default:
+              print_error();
+              fprintf(stderr, "cannot use .space before specifying a section\n");
+              return false;
+          }
+          section_offsets[current_section] += imm * 4;
+          pc = section_bases[current_section] + section_offsets[current_section];
+        }
       } else {
         print_error();
         fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
         return false;
       }
-      pc += imm * 4;
     } else {
+      if (!is_kernel){
+        if (!ensure_valid_section("instruction")) return false;
+        if (current_section == BSS_SECTION){
+          print_error();
+          fprintf(stderr, "Instructions not allowed in .bss section\n");
+          return false;
+        }
+        pc = section_bases[current_section] + section_offsets[current_section];
+      }
       int instruction = consume_instruction(&success);
-      if (success == FOUND) instruction_array_append(instructions->tail, instruction);
+      if (success == FOUND) {
+        if (is_kernel){
+          instruction_array_append(instructions->tail, instruction);
+          pc += 4;
+        } else {
+          if (current_section == RODATA_SECTION){
+            print_warning("Instruction emitted in .rodata section");
+          } else if (current_section == DATA_SECTION){
+            print_warning("Instruction emitted in .data section");
+          }
+          switch (current_section) {
+            case TEXT_SECTION:
+              instruction_array_append(text_instruction_array, instruction);
+              break;
+            case RODATA_SECTION:
+              instruction_array_append(rodata_instruction_array, instruction);
+              break;
+            case DATA_SECTION:
+              instruction_array_append(data_instruction_array, instruction);
+              break;
+            default:
+              break;
+          }
+          section_offsets[current_section] += 4;
+          pc = section_bases[current_section] + section_offsets[current_section];
+        }
+      }
       else if (success == ERROR) return false;
-      pc += 4;
     }
   }
 
@@ -1747,11 +2132,20 @@ static void append_labels_from_map(struct HashMap* map, struct LabelList* labels
 }
 
 // assemble an entire program
-struct InstructionArrayList* assemble(int num_files, int* file_names, 
+struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   const char *const *const argv, char** files, struct LabelList** labels_out){
 
+  is_kernel = kernel;
+  pass_number = 1;
+  current_section = -1;
+  text_instruction_array = NULL;
+  rodata_instruction_array = NULL;
+  data_instruction_array = NULL;
+  bss_size = 0;
+  reset_section_offsets();
+  for (int i = 0; i < 4; ++i) section_sizes[i] = 0;
+
   if (labels_out != NULL) *labels_out = NULL;
-  is_kernel = false;
 
   current_file_index = 0;
 
@@ -1774,6 +2168,26 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
     }
   }
 
+  if (!is_kernel){
+    for (int i = 0; i < 4; ++i) section_sizes[i] = section_offsets[i];
+    compute_section_bases();
+    for (int i = 0; i < num_files; ++i) adjust_label_map_for_sections(local_labels[i]);
+    adjust_label_map_for_sections(global_labels);
+  }
+
+  struct Slice start_label = {"_start", 6};
+  if (!label_has_definition(global_labels, &start_label)){
+    fprintf(stderr, "Missing global label _start\n");
+    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+    free(local_labels);
+    free(local_defines);
+    destroy_hash_map(global_labels);
+    return NULL;
+  }
+  entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
+  if (is_kernel) entry_point += 0x400;
+
   pass_number = 2;
 
   struct InstructionArrayList* instructions = create_instruction_array_list();
@@ -1785,7 +2199,19 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
     }
   }
 
-  pc = is_kernel ? 0x400 : 0;
+  if (!is_kernel){
+    text_instruction_array = instructions->head;
+    text_instruction_array->origin = section_bases[TEXT_SECTION];
+    rodata_instruction_array = create_instruction_array(10, section_bases[RODATA_SECTION]);
+    data_instruction_array = create_instruction_array(10, section_bases[DATA_SECTION]);
+    instruction_array_list_append(instructions, rodata_instruction_array);
+    instruction_array_list_append(instructions, data_instruction_array);
+  }
+
+  reset_section_offsets();
+  current_section = -1;
+  bss_size = 0;
+  pc = is_kernel ? 0x400 : section_bases[TEXT_SECTION];
   for (int i = 0; i < num_files; ++i){
     current_file_index = i;
     current_file = argv[file_names[i]];
@@ -1815,5 +2241,10 @@ struct InstructionArrayList* assemble(int num_files, int* file_names,
   free(local_defines);
   destroy_hash_map(global_labels);
 
-  return instructions;
+  struct ProgramDescriptor* program = malloc(sizeof(struct ProgramDescriptor));
+  program->entry_point = entry_point;
+  program->sections = instructions;
+  program->bss_size = bss_size;
+
+  return program;
 }

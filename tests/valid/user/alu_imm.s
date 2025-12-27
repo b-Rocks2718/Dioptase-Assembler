@@ -1,5 +1,8 @@
     # test different registers
     # test arithmetic immediate encoding
+    .text
+    
+    .global _start
 _start:
     add r0, r2, 11
     add r3, r4, 0b11

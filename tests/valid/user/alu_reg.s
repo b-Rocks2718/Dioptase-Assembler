@@ -1,5 +1,8 @@
     # test different registers
     # test all opcodes
+    .text
+
+    .global _start
 _start:
     and  r0, r1, r2
     nand r3, r4, r5

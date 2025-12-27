@@ -333,7 +333,7 @@ bool expand_macros(void){
 
 // copy the program into a new string, but without the comments
 // expand macros into real instructions
-char** preprocess(int num_files, int* file_names, bool has_start,
+char** preprocess(int num_files, int* file_names, bool is_kernel,
   const char *const *const argv, const char * const * const files){
 
   char ** result_list = malloc(num_files * sizeof(char**));
@@ -342,9 +342,9 @@ char** preprocess(int num_files, int* file_names, bool has_start,
 
     // initialize parser
     current = files[i];
+    current_buffer_start = current;
     line_count = 1;
-    pc = 0;
-    is_kernel = false;
+    pc = is_kernel ? 0 : 0x80000000;
     result_index = 0;
     capacity = 60;
     current_file = argv[file_names[i]];
@@ -358,7 +358,7 @@ char** preprocess(int num_files, int* file_names, bool has_start,
     result_index++; 
 
     // add a jump to _start
-    if (i == 0 && has_start){
+    if (i == 0 && is_kernel){
       result_index += sprintf(result + result_index, 
         "  movu r29, _start; movl r29, _start; br r29, r29\n");
     }

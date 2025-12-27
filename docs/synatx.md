@@ -143,20 +143,13 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 
 `.global label` - makes label global
 
-`.kernel` - allows the use of privileged instructions
+`.origin a` - places the code following the directive at address `a`. Will error if you give it a value less than the current pc (can use it to forward, not backward). Only available in kernel mode.
 
-`.origin a` - places the code following the directive at address `a`. Will error if you give it a value less than the current pc (can use it to forward, not backward)
+`.text`, `.data`, `.rodata`, and `.bss` will automatically create sections starting at the next available address, and 
+are only available for user mode programs.
 
-`.fill imm` - zero extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`
+`.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`
 
 `.space n` - expands to `.fill 0`, repeated `n` times
 
 `.define NAME n` - macro for defining constants
-
-## Privileged instructions
-
-By default, the assembler assumes you are writing user code and rejects privileged instructions.   
-To use privileged instructions, put `.kernel` somewhere in the file (preferably at the top).
-
-Privileged instructions sometimes take a control register as an operand 
-instead of a normal register. See the ISA doc for which ones do this.

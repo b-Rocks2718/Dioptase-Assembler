@@ -1,4 +1,7 @@
     # test addressing modes for atomic operations
+    .text
+
+    .global _start
 _start:
     # absolute addressing
     fada r1, r4, [r2]        # no offset  

@@ -1,5 +1,5 @@
-    # test different registers
-    # test arithmetic immediate encoding
+    .text
+
     add r0, r2, 11
     add r3, r4, 0b11
     add r5, r6, 0o11
@@ -11,17 +11,14 @@ loop:
     add r15, r16, -1
     add r17, r18, loop
 
-    # test shift immediate encoding
     lsl r1, r19, 11
     lsl r20, r21, 0
 
-    # test bitwise immediate encoding
     and r22, r23, 0xAF
     and r24, r25, 0xAF00
     and r26, r27, 0xAF0000
     and r28, r29, 0xAF000000
 
-    # test all opcodes
     nand r30, r31, 0
     or   r0, r0, 0
     nor  r0, r0, 0

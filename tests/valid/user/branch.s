@@ -1,4 +1,7 @@
     # test absolute and immediate branches
+    .text
+
+    .global _start
 _start:
     # immediate branches
 
