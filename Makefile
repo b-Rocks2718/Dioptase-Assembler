@@ -1,16 +1,29 @@
 # Directories
 SRC_DIR 	:= src
-BUILD_DIR := build/objfiles
-BIN_DIR   := build
+BUILD_ROOT := build
+DEBUG_DIR := $(BUILD_ROOT)/debug
+RELEASE_DIR := $(BUILD_ROOT)/release
+DEBUG_OBJ_DIR := $(DEBUG_DIR)/objfiles
+RELEASE_OBJ_DIR := $(RELEASE_DIR)/objfiles
 
 # Tools and flags
 CC        := gcc
-CFLAGS    := -Wall -g
+CFLAGS_COMMON ?= -Wall
+OPT_DEBUG := -O0
+OPT_RELEASE := -O3
+DEBUG_INFO := -g
+CFLAGS_DEBUG ?= $(CFLAGS_COMMON) $(OPT_DEBUG) $(DEBUG_INFO)
+CFLAGS_RELEASE ?= $(CFLAGS_COMMON) $(OPT_RELEASE)
+LDFLAGS_DEBUG ?=
+LDFLAGS_RELEASE ?=
 
 # Sources and objects
 SRCS      := $(wildcard $(SRC_DIR)/*.c)
-OBJFILES  := $(patsubst %.c,$(BUILD_DIR)/%.o, $(notdir $(SRCS)))
-EXEC      := $(BIN_DIR)/basm
+DEBUG_OBJFILES  := $(patsubst %.c,$(DEBUG_OBJ_DIR)/%.o, $(notdir $(SRCS)))
+RELEASE_OBJFILES  := $(patsubst %.c,$(RELEASE_OBJ_DIR)/%.o, $(notdir $(SRCS)))
+EXECUTABLE := basm
+DEBUG_EXEC := $(DEBUG_DIR)/$(EXECUTABLE)
+RELEASE_EXEC := $(RELEASE_DIR)/$(EXECUTABLE)
 
 # Tests
 USER_OKS := $(wildcard tests/valid/user/*.ok)
@@ -31,38 +44,48 @@ DEBUG_TESTS := $(patsubst tests/debug/%.s,%, $(DEBUG_SRCS))
 .PRECIOUS: tests/valid/user/%.hex tests/valid/kernel/%.hex tests/valid/user/lib/%.hex tests/valid/kernel/lib/%.hex
 
 # Link
-all: $(EXEC)
+all: debug
 
-$(EXEC): $(OBJFILES) | dirs
-	$(CC) $(CFLAGS) -o $@ $(OBJFILES)
+debug: $(DEBUG_EXEC)
+
+release: $(RELEASE_EXEC)
+
+$(DEBUG_EXEC): $(DEBUG_OBJFILES) | dirs-debug
+	$(CC) $(CFLAGS_DEBUG) $(LDFLAGS_DEBUG) -o $@ $(DEBUG_OBJFILES)
+
+$(RELEASE_EXEC): $(RELEASE_OBJFILES) | dirs-release
+	$(CC) $(CFLAGS_RELEASE) $(LDFLAGS_RELEASE) -o $@ $(RELEASE_OBJFILES)
 
 # Compile
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | dirs
-	$(CC) $(CFLAGS) -c $< -o $@
+$(DEBUG_OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs-debug
+	$(CC) $(CFLAGS_DEBUG) -c $< -o $@
+
+$(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs-release
+	$(CC) $(CFLAGS_RELEASE) -c $< -o $@
 
 # for each test/NAME.s, produce test/NAME.hex
-tests/valid/user/%.hex: tests/valid/user/%.s $(EXEC) | dirs
+tests/valid/user/%.hex: tests/valid/user/%.s $(DEBUG_EXEC) | dirs-debug
 	@echo "Assembling tests/valid/user/$*.s -> tests/valid/user/$*.hex"
-	@$(EXEC) $< -o $@
+	@$(DEBUG_EXEC) $< -o $@
 
-tests/valid/kernel/%.hex: tests/valid/kernel/%.s $(EXEC) | dirs
+tests/valid/kernel/%.hex: tests/valid/kernel/%.s $(DEBUG_EXEC) | dirs-debug
 	@echo "Assembling tests/valid/kernel/$*.s -> tests/valid/kernel/$*.hex"
 	@flags="-kernel"; \
 	if [ "$*" = "macro" ]; then \
 	  flags="$$flags -DBIG=0xAAAA5555 -DONE=1"; \
 	fi; \
-	$(EXEC) $$flags $< -o $@
+	$(DEBUG_EXEC) $$flags $< -o $@
 
-tests/valid/user/lib/%.hex: tests/valid/user/lib/%.s tests/valid/user/lib/lib.s $(EXEC) | dirs
+tests/valid/user/lib/%.hex: tests/valid/user/lib/%.s tests/valid/user/lib/lib.s $(DEBUG_EXEC) | dirs-debug
 	@echo "Assembling tests/valid/user/lib/$*.s -> tests/valid/user/lib/$*.hex"
-	@$(EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$*.s -o $@
+	@$(DEBUG_EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$*.s -o $@
 
-tests/valid/kernel/lib/%.hex: tests/valid/kernel/lib/%.s tests/valid/kernel/lib/lib.s $(EXEC) | dirs
+tests/valid/kernel/lib/%.hex: tests/valid/kernel/lib/%.s tests/valid/kernel/lib/lib.s $(DEBUG_EXEC) | dirs-debug
 	@echo "Assembling tests/valid/kernel/lib/$*.s -> tests/valid/kernel/lib/$*.hex"
-	@$(EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$*.s -o $@
+	@$(DEBUG_EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$*.s -o $@
 
 # Run the test suite.
-test: dirs $(EXEC)
+define RUN_TESTS
 	@GREEN="\033[0;32m"; \
 	RED="\033[0;31m"; \
 	YELLOW="\033[0;33m"; \
@@ -71,7 +94,7 @@ test: dirs $(EXEC)
 	echo "Running $(words $(VALID_USER_TESTS)) user tests:"; \
 	for t in $(VALID_USER_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  if timeout 1s $(EXEC) tests/valid/user/$$t.s -o tests/valid/user/$$t.hex >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) tests/valid/user/$$t.s -o tests/valid/user/$$t.hex >/dev/null 2>&1; then \
 	    if cmp --silent tests/valid/user/$$t.hex tests/valid/user/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
@@ -88,7 +111,7 @@ test: dirs $(EXEC)
 	echo "\nRunning $(words $(VALID_USER_LIB_TESTS)) user lib tests:"; \
 	for t in $(VALID_USER_LIB_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  if timeout 1s $(EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$$t.s -o tests/valid/user/lib/$$t.hex >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) tests/valid/user/lib/lib.s tests/valid/user/lib/$$t.s -o tests/valid/user/lib/$$t.hex >/dev/null 2>&1; then \
 	    if cmp --silent tests/valid/user/lib/$$t.hex tests/valid/user/lib/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
@@ -109,7 +132,7 @@ test: dirs $(EXEC)
 	  case "$$t" in \
 	    macro) kernel_flags="$$kernel_flags -DBIG=0xAAAA5555 -DONE=1";; \
 	  esac; \
-	  if timeout 1s $(EXEC) $$kernel_flags tests/valid/kernel/$$t.s -o tests/valid/kernel/$$t.hex >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) $$kernel_flags tests/valid/kernel/$$t.s -o tests/valid/kernel/$$t.hex >/dev/null 2>&1; then \
 	    if cmp --silent tests/valid/kernel/$$t.hex tests/valid/kernel/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
@@ -126,7 +149,7 @@ test: dirs $(EXEC)
 	echo "\nRunning $(words $(VALID_KERNEL_LIB_TESTS)) kernel lib tests:"; \
 	for t in $(VALID_KERNEL_LIB_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  if timeout 1s $(EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$$t.s -o tests/valid/kernel/lib/$$t.hex >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$$t.s -o tests/valid/kernel/lib/$$t.hex >/dev/null 2>&1; then \
 	    if cmp --silent tests/valid/kernel/lib/$$t.hex tests/valid/kernel/lib/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
@@ -143,7 +166,7 @@ test: dirs $(EXEC)
 	echo "\nRunning $(words $(INVALID_TESTS)) invalid tests:"; \
 	for t in $(INVALID_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
-	  if timeout 1s $(EXEC) tests/invalid/$$t.s -o tests/invalid/$$t.hex >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) tests/invalid/$$t.s -o tests/invalid/$$t.hex >/dev/null 2>&1; then \
 	    echo "$$RED FAIL $$NC"; \
 	  else \
 	    if [ $$? -eq 124 ]; then \
@@ -156,7 +179,7 @@ test: dirs $(EXEC)
 	  fi; \
 	done; \
 	printf "%s %-20s " '-' "bad_lib"; \
-	if timeout 1s $(EXEC) tests/invalid/lib/main.s tests/invalid/lib/lib.s -o tests/invalid/lib/main.hex >/dev/null 2>&1; then \
+	if timeout 1s $(TEST_EXEC) tests/invalid/lib/main.s tests/invalid/lib/lib.s -o tests/invalid/lib/main.hex >/dev/null 2>&1; then \
 	  echo "$$RED FAIL $$NC"; \
 	else \
 	  if [ $$? -eq 124 ]; then \
@@ -175,7 +198,7 @@ test: dirs $(EXEC)
 	  case "$$t" in \
 	    *_kernel) debug_flags="-debug -kernel";; \
 	  esac; \
-	  if timeout 1s $(EXEC) $$debug_flags tests/debug/$$t.s -o tests/debug/$$t.debug >/dev/null 2>&1; then \
+	  if timeout 1s $(TEST_EXEC) $$debug_flags tests/debug/$$t.s -o tests/debug/$$t.debug >/dev/null 2>&1; then \
 	    if [ -f tests/debug/$$t.debug ]; then \
 	      ok=1; \
 	      if [ -f tests/debug/$$t.labels ]; then \
@@ -206,26 +229,37 @@ test: dirs $(EXEC)
 	done; \
 	echo; \
 	echo "Summary: $$passed / $$total tests passed.";
+endef
 
-.PHONY: coverage
+test: TEST_EXEC := $(DEBUG_EXEC)
+test: $(DEBUG_EXEC)
+	$(RUN_TESTS)
+
+test-release: TEST_EXEC := $(RELEASE_EXEC)
+test-release: $(RELEASE_EXEC)
+	$(RUN_TESTS)
+
+.PHONY: all debug release test test-release coverage clean purge
 coverage: clean
 	@echo "Rebuilding with coverage flags..."
-	$(MAKE) CFLAGS="$(CFLAGS) -fprofile-arcs -ftest-coverage" \
-	        LDFLAGS="-fprofile-arcs -ftest-coverage"
+	$(MAKE) debug CFLAGS_DEBUG="$(CFLAGS_DEBUG) -fprofile-arcs -ftest-coverage" \
+	        LDFLAGS_DEBUG="$(LDFLAGS_DEBUG) -fprofile-arcs -ftest-coverage"
 	@echo "Running tests..."
 	$(MAKE) test
 	@echo "Generating coverage report..."
-	@gcov -o $(BUILD_DIR) $(SRCS)
+	@gcov -o $(DEBUG_OBJ_DIR) $(SRCS)
 
 
 # Ensure build directory exists
-dirs:
-	@mkdir -p $(BUILD_DIR) $(BIN_DIR)
+dirs-debug:
+	@mkdir -p $(DEBUG_OBJ_DIR) $(DEBUG_DIR)
+
+dirs-release:
+	@mkdir -p $(RELEASE_OBJ_DIR) $(RELEASE_DIR)
 
 # Remove everything but the executable
-.PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(DEBUG_OBJ_DIR) $(RELEASE_OBJ_DIR)
 	rm -f tests/valid/user/*.hex
 	rm -f tests/valid/user/lib/*.hex
 	rm -f tests/valid/kernel/*.hex
@@ -239,6 +273,5 @@ clean:
 	rm -f a.hex
 
 # Remove everything
-.PHONY: purge
 purge: clean
-	rm -rf $(BUILD_DIR) $(BIN_DIR)
+	rm -rf $(BUILD_ROOT)

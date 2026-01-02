@@ -705,6 +705,12 @@ int consume_alu_op(int alu_op, bool* success){
     } else if (14 <= alu_op && alu_op < 19) {
       // arithmetic op
       encoding = encode_arithmetic_immediate(imm, success);
+    } else {
+      // invalid alu op for immediate
+      print_error();
+      fprintf(stderr, "ALU operation %d does not support immediate values\n", alu_op);
+      *success = false;
+      return 0;
     }
 
     assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
@@ -1541,7 +1547,7 @@ void record_define(bool* success){
 
 // consumes a single instruction and converts it to binary or hex
 int consume_instruction(enum ConsumeResult* result){
-  int instruction;
+  int instruction = 0;
   bool success = true;
 
   // user instructions
