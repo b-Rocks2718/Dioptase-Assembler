@@ -23,3 +23,7 @@ _start:
     sub  r0, r0, r0
     subb r0, r0, r0
     cmp  r1, r2
+    sxtb r3, r4
+    sxtd r5, r6
+    tncb r7, r8
+    tncd r9, r10

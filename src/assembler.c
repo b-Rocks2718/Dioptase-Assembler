@@ -664,9 +664,9 @@ int consume_alu_op(int alu_op, bool* success){
     return 0;
   }
 
-  // edge case for 'not' because it only has 2 parameters
+  // edge case for 'not', 'sxtb', 'sxtd', 'tncb', 'tncd' because they only have 2 parameters
   int rb = 0;
-  if (alu_op != 6){
+  if (alu_op != 6 && alu_op != 18 && alu_op != 19 && alu_op != 20 && alu_op != 21){
     rb = consume_register();
     if (rb == -1){
       print_error();
@@ -1552,6 +1552,8 @@ int consume_instruction(enum ConsumeResult* result){
 
   // user instructions
   skip();
+
+  // alu instructions
   if (consume_keyword("and")) instruction = consume_alu_op(0, &success);
   else if (consume_keyword("nand")) instruction = consume_alu_op(1, &success);
   else if (consume_keyword("or")) instruction = consume_alu_op(2, &success);
@@ -1571,7 +1573,15 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("sub")) instruction = consume_alu_op(16, &success);
   else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
   else if (consume_keyword("cmp")) instruction = consume_cmp(&success);
+  else if (consume_keyword("sxtb")) instruction = consume_alu_op(18, &success);
+  else if (consume_keyword("sxtd")) instruction = consume_alu_op(19, &success);
+  else if (consume_keyword("tncb")) instruction = consume_alu_op(20, &success);
+  else if (consume_keyword("tncd")) instruction = consume_alu_op(21, &success);
+  
+  // load upper immediate
   else if (consume_keyword("lui")) instruction = consume_lui(&success);
+  
+  // memory instructions
   else if (consume_keyword("swa")) instruction = consume_mem(0, true, false, &success);
   else if (consume_keyword("lwa")) instruction = consume_mem(0, true, true, &success);
   else if (consume_keyword("sw")) instruction = consume_mem(0, false, false, &success);
@@ -1584,6 +1594,8 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("lba")) instruction = consume_mem(2, true, true, &success);
   else if (consume_keyword("sb")) instruction = consume_mem(2, false, false, &success);
   else if (consume_keyword("lb")) instruction = consume_mem(2, false, true, &success);
+  
+  // branch instructions
   else if (consume_keyword("br")) instruction = consume_branch(0, false, &success);
   else if (consume_keyword("bz")) instruction = consume_branch(1, false, &success);
   else if (consume_keyword("bnz")) instruction = consume_branch(2, false, &success);
@@ -1623,7 +1635,11 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("bba")) instruction = consume_branch(17, true, &success);
   else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
   else if (consume_keyword("jmp")) instruction = consume_jmp(&success);
+  
+  // system calls
   else if (consume_keyword("sys")) instruction = consume_syscall(&success);
+  
+  // atomic instructions
   else if (consume_keyword("fada")) instruction = consume_atomic(true, true, &success);
   else if (consume_keyword("fad")) instruction = consume_atomic(false, true, &success);
   else if (consume_keyword("swpa")) instruction = consume_atomic(true, false, &success);

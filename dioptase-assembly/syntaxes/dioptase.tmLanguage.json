@@ -41,7 +41,7 @@
       "patterns": [
         {
           "name": "keyword.instruction.dioptase",
-          "match": "\\b(?:rfi|and|nand|or|nor|xor|xnor|not|lsl|lsr|asr|rotl|rotr|lslc|lsrc|add|addc|sub|cmp|subb|mul|sw|lw|swa|lwa|sd|sda|ld|lda|sb|sba|lb|lba|br|bz|bnz|bs|bns|bc|bnc|bo|bno|bps|bnps|bg|bge|bl|ble|ba|bae|bb|bbe|jmp|bra|bza|bnza|bsa|bnsa|bca|bnca|boa|bnoa|bpa|bnpa|bga|bgea|bla|blea|baa|baea|bba|bbea|lui|sys|crmv|tlbr|tlbw|tlbi|tlbc|mode|rfe|nop|mov|ret|jmp|fada|fad|swpa|swp|ipi)\\b"
+          "match": "\\b(?:rfi|and|nand|or|nor|xor|xnor|not|lsl|lsr|asr|rotl|rotr|lslc|lsrc|add|addc|sub|cmp|subb|mul|sw|lw|swa|lwa|sd|sda|ld|lda|sb|sba|lb|lba|br|bz|bnz|bs|bns|bc|bnc|bo|bno|bps|bnps|bg|bge|bl|ble|ba|bae|bb|bbe|jmp|bra|bza|bnza|bsa|bnsa|bca|bnca|boa|bnoa|bpa|bnpa|bga|bgea|bla|blea|baa|baea|bba|bbea|lui|sys|crmv|tlbr|tlbw|tlbi|tlbc|mode|rfe|nop|mov|ret|jmp|fada|fad|swpa|swp|ipi|sxtb|sxtd|tncb|tncd)\\b"
         }
       ]
     },
