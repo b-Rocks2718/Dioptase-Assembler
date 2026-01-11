@@ -987,12 +987,12 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
 }
 
 int encode_branch_immediate(long imm, bool* success){
-  if (-(1 << 21) <= imm && imm < (1 << 21)){
-    return imm & 0x3FFFFF;
+  if (-(1 << 23) <= imm && imm < (1 << 23) && (imm & 3) == 0){
+    return (imm >> 2) & 0x3FFFFF;
   } else {
     *success = false;
     print_error();
-    fprintf(stderr, "branch immediate must be in range -2097152 to 2097151\n");
+    fprintf(stderr, "branch immediate must be divisible by 4 and in range -8388608 to 8388607\n");
     fprintf(stderr, "Got %ld\n", imm);
     return 0;
   }
@@ -1671,7 +1671,7 @@ int consume_instruction(enum ConsumeResult* result){
 bool process_labels(char const* const prog){
   current = prog;
   current_buffer_start = prog - 1;
-  line_count = 0;
+  line_count = 1;
 
   local_labels[current_file_index] = create_hash_map(1000);
   local_defines[current_file_index] = create_hash_map(1000);
@@ -1877,7 +1877,8 @@ bool process_labels(char const* const prog){
         }
       }
       consume_instruction(&result);
-      if (result != FOUND) {
+      if (result == ERROR) return false;
+      if (result == NOT_FOUND) {
         print_error();
         fprintf(stderr, "Unrecognized instruction\n");
         return false;
@@ -1897,7 +1898,7 @@ bool process_labels(char const* const prog){
 bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
   current_buffer_start = prog - 1;
-  line_count = 0;
+  line_count = 1;
 
   enum ConsumeResult success = FOUND;
 

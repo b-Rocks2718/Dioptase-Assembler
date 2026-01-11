@@ -1,5 +1,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,13 +12,20 @@
 #include "preprocessor.h"
 #include "elf.h"
 
+enum { CRT_FILE_COUNT = 2 };
+static const char* const CRT_FILE_PATHS[CRT_FILE_COUNT] = {
+  "/home/brooks/Dioptase/Dioptase-Assembler/crt/crt0.s",
+  "/home/brooks/Dioptase/Dioptase-Assembler/crt/arithmetic.s",
+};
+
 int main(int argc, const char *const *const argv){
   if (argc <= 0) {
     fprintf(stderr,"usage: %s <file name>\n",argv[0]);
     exit(1);
   }
 
-  int* file_names = malloc(argc * sizeof(int));
+  // Leave room for optional CRT inputs when -crt is used.
+  int* file_names = malloc((argc + CRT_FILE_COUNT) * sizeof(int));
   int num_files = 0;
 
   const char* target_name = "./a.hex";
@@ -27,6 +35,7 @@ int main(int argc, const char *const *const argv){
   bool pre_only = false;
   bool is_kernel = false;
   bool debug_labels = false;
+  bool include_crt = false;
   const char** cli_defines = malloc(argc * sizeof(char*));
   int num_defines = 0;
   for (int i = 1; i < argc; ++i){
@@ -45,6 +54,8 @@ int main(int argc, const char *const *const argv){
       is_kernel = true;
     } else if (strcmp(argv[i], "-debug") == 0){
       debug_labels = true;
+    } else if (strcmp(argv[i], "-crt") == 0){
+      include_crt = true;
     } else if (strncmp(argv[i], "-D", 2) == 0){
       const char* def = argv[i] + 2;
       if (def[0] == '\0' || strchr(def, '=') == NULL){
@@ -55,7 +66,7 @@ int main(int argc, const char *const *const argv){
       }
       cli_defines[num_defines++] = def;
     } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -debug, or -DNAME=value\n", argv[i]);
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -debug, -crt, or -DNAME=value\n", argv[i]);
       free(file_names);
       free(cli_defines);
       exit(1);
@@ -71,22 +82,44 @@ int main(int argc, const char *const *const argv){
     exit(1);
   }
 
+  const char* const* input_args = argv;
+  const char** input_args_alloc = NULL;
+
+  if (include_crt) {
+    // Prepend CRT sources so _start is emitted first in the output image.
+    input_args_alloc = malloc((argc + CRT_FILE_COUNT) * sizeof(char*));
+    for (int i = 0; i < argc; ++i) input_args_alloc[i] = argv[i];
+    for (int i = 0; i < CRT_FILE_COUNT; ++i) {
+      input_args_alloc[argc + i] = CRT_FILE_PATHS[i];
+    }
+    input_args = input_args_alloc;
+
+    for (int i = num_files - 1; i >= 0; --i) {
+      file_names[i + CRT_FILE_COUNT] = file_names[i];
+    }
+    for (int i = 0; i < CRT_FILE_COUNT; ++i) {
+      file_names[i] = argc + i;
+    }
+    num_files += CRT_FILE_COUNT;
+  }
+
   char const** const files = malloc(num_files * sizeof(char**));
 
   for (int i = 0; i < num_files; ++i){
     // open the files
-    int fd = open(argv[file_names[i]],O_RDONLY);
+    const char* file_path = input_args[file_names[i]];
+    int fd = open(file_path,O_RDONLY);
     if (fd < 0) {
-        perror("open");
-        exit(1);
+      fprintf(stderr, "Failed to open source file %s: %s\n", file_path, strerror(errno));
+      exit(1);
     }
 
     // determine its size (std::filesystem::get_size?)
     struct stat file_stats;
     int rc = fstat(fd,&file_stats);
     if (rc != 0) {
-        perror("fstat");
-        exit(1);
+      fprintf(stderr, "Failed to stat source file %s: %s\n", file_path, strerror(errno));
+      exit(1);
     }
 
     // map the file in my address space
@@ -98,7 +131,7 @@ int main(int argc, const char *const *const argv){
         fd,
         0);
     if (src == MAP_FAILED) {
-      perror("mmap");
+      fprintf(stderr, "Failed to map source file %s: %s\n", file_path, strerror(errno));
       free(file_names);
       free(files);
       exit(1);
@@ -106,11 +139,12 @@ int main(int argc, const char *const *const argv){
     files[i] = src;
   }
 
-  char** preprocessed = preprocess(num_files, file_names, is_kernel, argv, files);
+  char** preprocessed = preprocess(num_files, file_names, is_kernel, input_args, files);
   if (preprocessed == NULL) {
     free(file_names);
     free(files);
     free(cli_defines);
+    free(input_args_alloc);
     return 1;
   }
 
@@ -122,6 +156,7 @@ int main(int argc, const char *const *const argv){
     for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
     free(preprocessed);
     free(cli_defines);
+    free(input_args_alloc);
     return 0;
   }
 
@@ -131,7 +166,7 @@ int main(int argc, const char *const *const argv){
     num_files,
     file_names,
     is_kernel,
-    argv,
+    input_args,
     preprocessed,
     debug_labels ? &labels : NULL
   );
@@ -141,6 +176,7 @@ int main(int argc, const char *const *const argv){
   free(file_names);
   free(files);
   free(cli_defines);
+  free(input_args_alloc);
 
   if (program == NULL) {
     if (target_name_alloc != NULL) free(target_name_alloc);

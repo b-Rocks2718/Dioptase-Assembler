@@ -7,9 +7,9 @@ _start:
 
     # test immediate encoding
     br 0
-    br 1
-    br 0xFFFF
-    br -1
+    br 4
+    br 0xFFF0
+    br -4
     br _start
 
     # test branch codes
