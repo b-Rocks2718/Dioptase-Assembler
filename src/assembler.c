@@ -47,6 +47,7 @@ int pass_number = 1;
 // map labels to their addresses
 static struct HashMap** local_labels;
 static struct HashMap** local_defines;
+static struct HashMap** local_globals;
 static struct HashMap* global_labels;
 static int cli_define_count = 0;
 static const char* const* cli_defines = NULL;
@@ -572,8 +573,9 @@ long consume_label_imm(enum ConsumeResult* result){
     if (label_has_definition(local_labels[current_file_index], label)){
       imm = hash_map_get(local_labels[current_file_index], label) - pc - 4;
 
-      // if this label is global, the global entry should match
-      if (label_has_definition(global_labels, label))
+      // if this label is global in this file, the global entry should match
+      if (hash_map_contains(local_globals[current_file_index], label) &&
+          label_has_definition(global_labels, label))
         assert(imm == hash_map_get(global_labels, label) - pc - 4);
       
       *result = FOUND;
@@ -1675,6 +1677,7 @@ bool process_labels(char const* const prog){
 
   local_labels[current_file_index] = create_hash_map(1000);
   local_defines[current_file_index] = create_hash_map(1000);
+  local_globals[current_file_index] = create_hash_map(1000);
   if (!apply_cli_defines()) return false;
 
   while (!is_at_end()){
@@ -1707,8 +1710,8 @@ bool process_labels(char const* const prog){
         label_was_used = true;
       }
 
-      // check for duplicates 
-      if (hash_map_contains(global_labels, label)){
+      // check for duplicates on globals explicitly declared in this file
+      if (hash_map_contains(local_globals[current_file_index], label)){
         if (label_has_definition(global_labels, label)){
           // duplicate label error
           print_error();
@@ -1733,7 +1736,7 @@ bool process_labels(char const* const prog){
             label_used = true;
           }
 
-          if (!hash_map_contains(local_labels[current_file_index], label)){
+          if (!hash_map_contains(local_globals[current_file_index], label)){
             if (label_used){
               // we need to make a copy
               struct Slice* label_copy = malloc(sizeof(struct Slice));
@@ -1741,11 +1744,19 @@ bool process_labels(char const* const prog){
               label_copy->start = label->start;
               label = label_copy;
             }
-            hash_map_insert(local_labels[current_file_index], label, 0, false);
+            hash_map_insert(local_globals[current_file_index], label, 0, false);
             label_used = true;
-          } else {
+          }
+
+          if (label_has_definition(local_labels[current_file_index], label)){
+            if (label_has_definition(global_labels, label)){
+              print_error();
+              fprintf(stderr, "Duplicate global label\n");
+              if (!label_used) free(label);
+              return false;
+            }
             make_defined(global_labels, label, hash_map_get(local_labels[current_file_index], label));
-          } 
+          }
           
           if (!label_used) free(label);
 
@@ -1922,8 +1933,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         fprintf(stderr, ".global directive requires a label\n");
         return false;
       }
-      if (!hash_map_contains(local_labels[current_file_index], name)
-          || !hash_map_contains(global_labels, name)){
+      if (!label_has_definition(global_labels, name)){
         print_error();
         fprintf(stderr, "Global label \"");
         print_slice_err(name);
@@ -2174,6 +2184,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
 
   local_labels = malloc(num_files * sizeof(struct HashMap*));
   local_defines = malloc(num_files * sizeof(struct HashMap*));
+  local_globals = malloc(num_files * sizeof(struct HashMap*));
 
   // make a hashmap of labels for each file + one global hashmap for global labels
   global_labels = create_hash_map(1000);
@@ -2184,8 +2195,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     if (!process_labels(files[i] + 1)) {
       for (int j = 0; j <= i; ++j) destroy_hash_map(local_labels[j]);
       for (int j = 0; j <= i; ++j) destroy_hash_map(local_defines[j]);
+      for (int j = 0; j <= i; ++j) destroy_hash_map(local_globals[j]);
       free(local_labels);
       free(local_defines);
+      free(local_globals);
       destroy_hash_map(global_labels);
       return NULL;
     }
@@ -2203,8 +2216,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     fprintf(stderr, "Missing global label _start\n");
     for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
     for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
     free(local_labels);
     free(local_defines);
+    free(local_globals);
     destroy_hash_map(global_labels);
     return NULL;
   }
@@ -2241,8 +2256,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     if (!to_binary(files[i] + 1, instructions)){
       for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
       for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
       free(local_labels);
       free(local_defines);
+      free(local_globals);
       destroy_hash_map(global_labels);
       destroy_instruction_array_list(instructions);
       return NULL;
@@ -2260,8 +2277,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
 
   for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
   for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
   free(local_labels);
   free(local_defines);
+  free(local_globals);
   destroy_hash_map(global_labels);
 
   struct ProgramDescriptor* program = malloc(sizeof(struct ProgramDescriptor));
