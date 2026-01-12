@@ -87,7 +87,7 @@ bool hash_entry_contains_def(struct HashEntry* entry, struct Slice* key){
   } else if (entry->next == NULL){
     return false;
   } else {
-    return hash_entry_contains(entry->next, key);
+    return hash_entry_contains_def(entry->next, key);
   }
 }
 

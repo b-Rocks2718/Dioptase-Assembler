@@ -44,7 +44,11 @@ char const * current_file;
 int current_file_index;
 int pass_number = 1;
 
-// map labels to their addresses
+// Map labels/defines to their addresses or values.
+// local_labels: per-file label table used for local resolution and duplicate checks.
+// local_defines: per-file .define table to resolve constants without polluting globals.
+// local_globals: per-file set of labels declared with .global (used to validate global duplication).
+// global_labels: shared table of labels exported across files via .global.
 static struct HashMap** local_labels;
 static struct HashMap** local_defines;
 static struct HashMap** local_globals;
@@ -73,10 +77,12 @@ static void compute_section_bases(void) {
 }
 
 static uint64_t encode_section_offset(enum UserSection section, uint32_t offset) {
+  // Pack section + offset for pass 1; resolved to absolute addresses after layout.
   return ((uint64_t)section << 32) | offset;
 }
 
 static void adjust_label_map_for_sections(struct HashMap* map) {
+  // Convert packed section offsets into absolute addresses once section sizes are known.
   for (size_t i = 0; i < map->size; ++i){
     struct HashEntry* entry = map->arr[i];
     while (entry != NULL){
@@ -235,6 +241,14 @@ static void print_warning(const char* message) {
   print_slice_err(&unrecognized);
   fprintf(stderr, "\"\n");
   fprintf(stderr, "%s\n", message);
+}
+
+// Allocate a Slice wrapper for shared source buffers so each map owns its key.
+static struct Slice* clone_slice(const struct Slice* slice) {
+  struct Slice* copy = malloc(sizeof(struct Slice));
+  copy->start = slice->start;
+  copy->len = slice->len;
+  return copy;
 }
 
 // is the rest of the file just whitespace?
@@ -573,7 +587,7 @@ long consume_label_imm(enum ConsumeResult* result){
     if (label_has_definition(local_labels[current_file_index], label)){
       imm = hash_map_get(local_labels[current_file_index], label) - pc - 4;
 
-      // if this label is global in this file, the global entry should match
+      // If this label is global in this file, the global entry should match.
       if (hash_map_contains(local_globals[current_file_index], label) &&
           label_has_definition(global_labels, label))
         assert(imm == hash_map_get(global_labels, label) - pc - 4);
@@ -1710,7 +1724,7 @@ bool process_labels(char const* const prog){
         label_was_used = true;
       }
 
-      // check for duplicates on globals explicitly declared in this file
+      // Check for duplicates on globals explicitly declared in this file.
       if (hash_map_contains(local_globals[current_file_index], label)){
         if (label_has_definition(global_labels, label)){
           // duplicate label error
@@ -1729,37 +1743,26 @@ bool process_labels(char const* const prog){
       skip();
       if (consume_keyword(".global")) {
         struct Slice* label = consume_identifier();
-        bool label_used = false;
         if (label != NULL){
-          if (!hash_map_contains(global_labels, label)){
-            hash_map_insert(global_labels, label, 0, false);
-            label_used = true;
-          }
-
+          // Track per-file global declarations to detect duplicate exports.
           if (!hash_map_contains(local_globals[current_file_index], label)){
-            if (label_used){
-              // we need to make a copy
-              struct Slice* label_copy = malloc(sizeof(struct Slice));
-              label_copy->len = label->len;
-              label_copy->start = label->start;
-              label = label_copy;
-            }
-            hash_map_insert(local_globals[current_file_index], label, 0, false);
-            label_used = true;
+            struct Slice* label_copy = clone_slice(label);
+            hash_map_insert(local_globals[current_file_index], label_copy, 0, false);
+          }
+          if (!hash_map_contains(global_labels, label)){
+            struct Slice* label_copy = clone_slice(label);
+            hash_map_insert(global_labels, label_copy, 0, false);
           }
 
           if (label_has_definition(local_labels[current_file_index], label)){
             if (label_has_definition(global_labels, label)){
               print_error();
               fprintf(stderr, "Duplicate global label\n");
-              if (!label_used) free(label);
               return false;
             }
             make_defined(global_labels, label, hash_map_get(local_labels[current_file_index], label));
           }
-          
-          if (!label_used) free(label);
-
+          free(label);
         } else {
           print_error();
           fprintf(stderr, ".global directive requires a label\n");
@@ -2019,9 +2022,10 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
         return false;
       }
-      if (0 <= imm && imm < ((long)1 << 32)){
+      if (imm >= -((long)1 << 31) && imm < ((long)1 << 32)){
+        uint32_t value = (uint32_t)imm;
         if (is_kernel){
-          instruction_array_append(instructions->tail, imm);
+          instruction_array_append(instructions->tail, (int)value);
           pc += 4;
         } else {
           if (!ensure_valid_section(".fill")) return false;
@@ -2030,13 +2034,13 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
           }
           switch (current_section) {
             case TEXT_SECTION:
-              instruction_array_append(text_instruction_array, imm);
+              instruction_array_append(text_instruction_array, (int)value);
               break;
             case RODATA_SECTION:
-              instruction_array_append(rodata_instruction_array, imm);
+              instruction_array_append(rodata_instruction_array, (int)value);
               break;
             case DATA_SECTION:
-              instruction_array_append(data_instruction_array, imm);
+              instruction_array_append(data_instruction_array, (int)value);
               break;
             case BSS_SECTION:
               print_error();
@@ -2052,7 +2056,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         }
       } else {
         print_error();
-        fprintf(stderr, ".fill immediate must be a positive 32 bit integer\n");
+        fprintf(stderr, ".fill immediate must fit in a 32-bit value\n");
         return false;
       }
     }

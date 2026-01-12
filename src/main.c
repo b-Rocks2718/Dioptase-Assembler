@@ -14,8 +14,8 @@
 
 enum { CRT_FILE_COUNT = 2 };
 static const char* const CRT_FILE_PATHS[CRT_FILE_COUNT] = {
-  "/home/brooks/Dioptase/Dioptase-Assembler/crt/crt0.s",
-  "/home/brooks/Dioptase/Dioptase-Assembler/crt/arithmetic.s",
+  "/home/brooks/Dioptase/Dioptase-OS/crt/crt0.s",
+  "/home/brooks/Dioptase/Dioptase-OS/crt/arithmetic.s",
 };
 
 int main(int argc, const char *const *const argv){
