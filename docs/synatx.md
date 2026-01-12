@@ -148,8 +148,8 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 `.text`, `.data`, `.rodata`, and `.bss` will automatically create sections starting at the next available address, and 
 are only available for user mode programs.
 
-`.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`
+`.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`; `imm` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
 
-`.space n` - expands to `.fill 0`, repeated `n` times
+`.space n` - expands to `.fill 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
 
 `.define NAME n` - macro for defining constants

@@ -572,6 +572,39 @@ long consume_literal(enum ConsumeResult* result) {
   }
 }
 
+// Purpose: Parse a numeric literal or a .define constant (no labels allowed).
+// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; context labels the directive for errors.
+// Outputs: Returns the literal or constant value when FOUND; returns 0 otherwise.
+// Invariants/Assumptions: local_defines for the current file is initialized.
+static long consume_define_or_literal(enum ConsumeResult* result, const char* context) {
+  long imm = consume_literal(result);
+  if (*result != NOT_FOUND) return imm;
+
+  struct Slice* name = consume_identifier();
+  if (name == NULL) {
+    *result = NOT_FOUND;
+    return 0;
+  }
+
+  if (hash_map_contains(local_defines[current_file_index], name)) {
+    imm = hash_map_get(local_defines[current_file_index], name);
+    *result = FOUND;
+  } else {
+    print_error();
+    if (context != NULL) {
+      fprintf(stderr, "%s constant \"", context);
+    } else {
+      fprintf(stderr, "Constant \"");
+    }
+    print_slice_err(name);
+    fprintf(stderr, "\" has not been defined\n");
+    *result = ERROR;
+  }
+
+  free(name);
+  return imm;
+}
+
 long consume_label_imm(enum ConsumeResult* result){
   struct Slice* label = consume_identifier();
   long imm = 0;
@@ -1838,10 +1871,12 @@ bool process_labels(char const* const prog){
       }
       else if (consume_keyword(".fill")) {
         enum ConsumeResult result; 
-        consume_literal(&result);
+        consume_define_or_literal(&result, ".fill");
         if (result != FOUND){
-          print_error();
-          if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+          if (result == NOT_FOUND){
+            print_error();
+            fprintf(stderr, "Invalid .fill immediate; expected integer literal or .define constant\n");
+          }
           return false;
         }
         if (is_kernel){
@@ -1860,10 +1895,12 @@ bool process_labels(char const* const prog){
       }
       else if (consume_keyword(".space")) { 
         enum ConsumeResult result; 
-        long imm = consume_literal(&result);
+        long imm = consume_define_or_literal(&result, ".space");
         if (result != FOUND){
-          print_error();
-          if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+          if (result == NOT_FOUND){
+            print_error();
+            fprintf(stderr, "Invalid .space count; expected integer literal or .define constant\n");
+          }
           return false;
         }
         if (is_kernel){
@@ -2016,10 +2053,12 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if (consume_keyword(".fill")) {
       enum ConsumeResult result; 
-      long imm = consume_literal(&result);
+      long imm = consume_define_or_literal(&result, ".fill");
       if (result != FOUND){
-        print_error();
-        if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+        if (result == NOT_FOUND){
+          print_error();
+          fprintf(stderr, "Invalid .fill immediate; expected integer literal or .define constant\n");
+        }
         return false;
       }
       if (imm >= -((long)1 << 31) && imm < ((long)1 << 32)){
@@ -2062,10 +2101,12 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if (consume_keyword(".space")) { 
       enum ConsumeResult result; 
-      long imm = consume_literal(&result);
+      long imm = consume_define_or_literal(&result, ".space");
       if (result != FOUND){
-        print_error();
-        if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
+        if (result == NOT_FOUND){
+          print_error();
+          fprintf(stderr, "Invalid .space count; expected integer literal or .define constant\n");
+        }
         return false;
       }
       if (0 <= imm && imm < ((long)1 << 32)){
