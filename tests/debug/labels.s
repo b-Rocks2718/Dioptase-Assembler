@@ -24,7 +24,7 @@ after_ro:
 data_a:
   .fill 0x33333333
 data_b:
-  .space 2
+  .space 8
 
 .text
 after_data:
@@ -32,7 +32,7 @@ after_data:
 
 .bss
 bss_a:
-  .space 4
+  .space 16
 
 .text
 done:

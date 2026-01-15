@@ -56,6 +56,11 @@ static struct HashMap* global_labels;
 static int cli_define_count = 0;
 static const char* const* cli_defines = NULL;
 
+// Byte sizing for directive accounting and output packing.
+static const uint32_t kWordBytes = 4;
+static const uint32_t kHalfBytes = 2;
+static const uint32_t kByteBytes = 1;
+
 #define USER_BASE_ADDR 0x80000000u
 #define SECTION_ALIGN 0x1000u
 
@@ -67,6 +72,76 @@ static uint32_t align_up(uint32_t value, uint32_t align) {
   uint32_t rem = value % align;
   if (rem == 0) return value;
   return value + (align - rem);
+}
+
+// Purpose: Encode the least-significant bytes of value in little-endian order.
+// Inputs: value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
+// Outputs: out is filled with count bytes.
+// Invariants/Assumptions: count is nonzero and no more than kWordBytes.
+static void encode_value_bytes(uint32_t value, uint8_t* out, uint32_t count){
+  for (uint32_t i = 0; i < count; ++i){
+    out[i] = (uint8_t)(value >> (8 * i));
+  }
+}
+
+// Purpose: Append raw bytes into a kernel instruction array and advance pc.
+// Inputs: arr is the destination array; bytes/count describe the payload.
+// Outputs: pc is incremented by count bytes.
+// Invariants/Assumptions: bytes are emitted in increasing address order.
+static void append_bytes_kernel(struct InstructionArray* arr, const uint8_t* bytes, uint32_t count){
+  for (uint32_t i = 0; i < count; ++i){
+    instruction_array_append_byte(arr, bytes[i], (int)pc);
+    pc += kByteBytes;
+  }
+}
+
+// Purpose: Append zero bytes into a kernel instruction array and advance pc.
+// Inputs: arr is the destination array; count is the number of zero bytes to emit.
+// Outputs: pc is incremented by count bytes.
+// Invariants/Assumptions: count is a non-negative byte count.
+static void append_zero_bytes_kernel(struct InstructionArray* arr, uint32_t count){
+  for (uint32_t i = 0; i < count; ++i){
+    instruction_array_append_byte(arr, 0, (int)pc);
+    pc += kByteBytes;
+  }
+}
+
+// Purpose: Append raw bytes into a user section array and advance offsets.
+// Inputs: arr is the destination array; bytes/count describe the payload; section selects base/offset.
+// Outputs: section_offsets and pc are incremented by count bytes.
+// Invariants/Assumptions: section_bases are initialized and aligned.
+static void append_bytes_user(struct InstructionArray* arr, const uint8_t* bytes, uint32_t count,
+                              enum UserSection section){
+  for (uint32_t i = 0; i < count; ++i){
+    uint32_t abs_pc = section_bases[section] + section_offsets[section];
+    instruction_array_append_byte(arr, bytes[i], (int)abs_pc);
+    section_offsets[section] += kByteBytes;
+  }
+  pc = section_bases[section] + section_offsets[section];
+}
+
+// Purpose: Append zero bytes into a user section array and advance offsets.
+// Inputs: arr is the destination array; count is the number of zero bytes; section selects base/offset.
+// Outputs: section_offsets and pc are incremented by count bytes.
+// Invariants/Assumptions: section_bases are initialized and aligned.
+static void append_zero_bytes_user(struct InstructionArray* arr, uint32_t count, enum UserSection section){
+  for (uint32_t i = 0; i < count; ++i){
+    uint32_t abs_pc = section_bases[section] + section_offsets[section];
+    instruction_array_append_byte(arr, 0, (int)abs_pc);
+    section_offsets[section] += kByteBytes;
+  }
+  pc = section_bases[section] + section_offsets[section];
+}
+
+// Purpose: Report misaligned instruction addresses with context.
+// Inputs: address is the misaligned byte address or section offset; label describes the address.
+// Outputs: Returns false after emitting an error.
+// Invariants/Assumptions: print_error has access to current file/line context.
+static bool report_instruction_alignment_error(uint32_t address, const char* label){
+  print_error();
+  fprintf(stderr, "Instruction address must be %u-byte aligned; %s is 0x%08X\n",
+          kWordBytes, label, address);
+  return false;
 }
 
 static void compute_section_bases(void) {
@@ -1716,7 +1791,10 @@ int consume_instruction(enum ConsumeResult* result){
   return instruction;
 }
 
-// first pass, find all the labels and their addresses
+// Purpose: First pass to collect labels and section sizes without emitting output.
+// Inputs: prog is the preprocessed source buffer for one file.
+// Outputs: Returns true on success; updates label maps and section offsets.
+// Invariants/Assumptions: current_file_index is set; section_offsets track byte offsets.
 bool process_labels(char const* const prog){
   current = prog;
   current_buffer_start = prog - 1;
@@ -1880,7 +1958,7 @@ bool process_labels(char const* const prog){
           return false;
         }
         if (is_kernel){
-          pc += 4;
+          pc += kWordBytes;
         } else {
           if (!ensure_valid_section(".fill")) return false;
           if (current_section == BSS_SECTION){
@@ -1888,7 +1966,55 @@ bool process_labels(char const* const prog){
             fprintf(stderr, ".fill not allowed in .bss section\n");
             return false;
           }
-          section_offsets[current_section] += 4;
+          section_offsets[current_section] += kWordBytes;
+          pc = section_offsets[current_section];
+        }
+        continue;
+      }
+      else if (consume_keyword(".fild")) {
+        enum ConsumeResult result; 
+        consume_define_or_literal(&result, ".fild");
+        if (result != FOUND){
+          if (result == NOT_FOUND){
+            print_error();
+            fprintf(stderr, "Invalid .fild immediate; expected integer literal or .define constant\n");
+          }
+          return false;
+        }
+        if (is_kernel){
+          pc += kHalfBytes;
+        } else {
+          if (!ensure_valid_section(".fild")) return false;
+          if (current_section == BSS_SECTION){
+            print_error();
+            fprintf(stderr, ".fild not allowed in .bss section\n");
+            return false;
+          }
+          section_offsets[current_section] += kHalfBytes;
+          pc = section_offsets[current_section];
+        }
+        continue;
+      }
+      else if (consume_keyword(".filb")) {
+        enum ConsumeResult result; 
+        consume_define_or_literal(&result, ".filb");
+        if (result != FOUND){
+          if (result == NOT_FOUND){
+            print_error();
+            fprintf(stderr, "Invalid .filb immediate; expected integer literal or .define constant\n");
+          }
+          return false;
+        }
+        if (is_kernel){
+          pc += kByteBytes;
+        } else {
+          if (!ensure_valid_section(".filb")) return false;
+          if (current_section == BSS_SECTION){
+            print_error();
+            fprintf(stderr, ".filb not allowed in .bss section\n");
+            return false;
+          }
+          section_offsets[current_section] += kByteBytes;
           pc = section_offsets[current_section];
         }
         continue;
@@ -1904,10 +2030,10 @@ bool process_labels(char const* const prog){
           return false;
         }
         if (is_kernel){
-          pc += imm * 4;
+          pc += imm;
         } else {
           if (!ensure_valid_section(".space")) return false;
-          section_offsets[current_section] += imm * 4;
+          section_offsets[current_section] += imm;
           pc = section_offsets[current_section];
         }
         continue;
@@ -1926,6 +2052,11 @@ bool process_labels(char const* const prog){
           fprintf(stderr, "Instructions not allowed in .bss section\n");
           return false;
         }
+        if (section_offsets[current_section] % kWordBytes != 0){
+          return report_instruction_alignment_error(section_offsets[current_section], "section offset");
+        }
+      } else if (pc % kWordBytes != 0) {
+        return report_instruction_alignment_error((uint32_t)pc, "pc");
       }
       consume_instruction(&result);
       if (result == ERROR) return false;
@@ -1935,9 +2066,9 @@ bool process_labels(char const* const prog){
         return false;
       }
       if (is_kernel){
-        pc += 4;
+        pc += kWordBytes;
       } else {
-        section_offsets[current_section] += 4;
+        section_offsets[current_section] += kWordBytes;
         pc = section_offsets[current_section];
       }
     }
@@ -1945,7 +2076,10 @@ bool process_labels(char const* const prog){
   return true;
 }
 
-// second pass, convert to binary
+// Purpose: Second pass to emit instruction/data bytes into output sections.
+// Inputs: prog is the preprocessed source buffer; instructions is the output list.
+// Outputs: Returns true on success; appends words to instruction arrays and updates bss_size.
+// Invariants/Assumptions: section_bases are computed; section_offsets track byte offsets.
 bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
   current_buffer_start = prog - 1;
@@ -2063,9 +2197,10 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       }
       if (imm >= -((long)1 << 31) && imm < ((long)1 << 32)){
         uint32_t value = (uint32_t)imm;
+        uint8_t bytes[kWordBytes];
+        encode_value_bytes(value, bytes, kWordBytes);
         if (is_kernel){
-          instruction_array_append(instructions->tail, (int)value);
-          pc += 4;
+          append_bytes_kernel(instructions->tail, bytes, kWordBytes);
         } else {
           if (!ensure_valid_section(".fill")) return false;
           if (current_section == TEXT_SECTION){
@@ -2073,13 +2208,13 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
           }
           switch (current_section) {
             case TEXT_SECTION:
-              instruction_array_append(text_instruction_array, (int)value);
+              append_bytes_user(text_instruction_array, bytes, kWordBytes, current_section);
               break;
             case RODATA_SECTION:
-              instruction_array_append(rodata_instruction_array, (int)value);
+              append_bytes_user(rodata_instruction_array, bytes, kWordBytes, current_section);
               break;
             case DATA_SECTION:
-              instruction_array_append(data_instruction_array, (int)value);
+              append_bytes_user(data_instruction_array, bytes, kWordBytes, current_section);
               break;
             case BSS_SECTION:
               print_error();
@@ -2090,12 +2225,114 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
               fprintf(stderr, "cannot use .fill before specifying a section\n");
               return false;
           }
-          section_offsets[current_section] += 4;
-          pc = section_bases[current_section] + section_offsets[current_section];
         }
       } else {
         print_error();
         fprintf(stderr, ".fill immediate must fit in a 32-bit value\n");
+        return false;
+      }
+    }
+    else if (consume_keyword(".fild")) {
+      enum ConsumeResult result; 
+      long imm = consume_define_or_literal(&result, ".fild");
+      if (result != FOUND){
+        if (result == NOT_FOUND){
+          print_error();
+          fprintf(stderr, "Invalid .fild immediate; expected integer literal or .define constant\n");
+        }
+        return false;
+      }
+      if (imm >= -((long)1 << 15) && imm < ((long)1 << 16)){
+        uint16_t value = (uint16_t)imm;
+        if (is_kernel){
+          uint8_t bytes[kHalfBytes];
+          encode_value_bytes(value, bytes, kHalfBytes);
+          append_bytes_kernel(instructions->tail, bytes, kHalfBytes);
+        } else {
+          if (!ensure_valid_section(".fild")) return false;
+          if (current_section == TEXT_SECTION){
+            print_warning(".fild used in .text section");
+          }
+          switch (current_section) {
+            case TEXT_SECTION:
+              {
+                uint8_t bytes[kHalfBytes];
+                encode_value_bytes(value, bytes, kHalfBytes);
+                append_bytes_user(text_instruction_array, bytes, kHalfBytes, current_section);
+              }
+              break;
+            case RODATA_SECTION:
+              {
+                uint8_t bytes[kHalfBytes];
+                encode_value_bytes(value, bytes, kHalfBytes);
+                append_bytes_user(rodata_instruction_array, bytes, kHalfBytes, current_section);
+              }
+              break;
+            case DATA_SECTION:
+              {
+                uint8_t bytes[kHalfBytes];
+                encode_value_bytes(value, bytes, kHalfBytes);
+                append_bytes_user(data_instruction_array, bytes, kHalfBytes, current_section);
+              }
+              break;
+            case BSS_SECTION:
+              print_error();
+              fprintf(stderr, ".fild not allowed in .bss section\n");
+              return false;
+            default:
+              print_error();
+              fprintf(stderr, "cannot use .fild before specifying a section\n");
+              return false;
+          }
+        }
+      } else {
+        print_error();
+        fprintf(stderr, ".fild immediate must fit in a 16-bit value\n");
+        return false;
+      }
+    }
+    else if (consume_keyword(".filb")) {
+      enum ConsumeResult result; 
+      long imm = consume_define_or_literal(&result, ".filb");
+      if (result != FOUND){
+        if (result == NOT_FOUND){
+          print_error();
+          fprintf(stderr, "Invalid .filb immediate; expected integer literal or .define constant\n");
+        }
+        return false;
+      }
+      if (imm >= -((long)1 << 7) && imm < ((long)1 << 8)){
+        uint8_t value = (uint8_t)imm;
+        if (is_kernel){
+          append_bytes_kernel(instructions->tail, &value, kByteBytes);
+        } else {
+          if (!ensure_valid_section(".filb")) return false;
+          if (current_section == TEXT_SECTION){
+            print_warning(".filb used in .text section");
+          }
+          switch (current_section) {
+            case TEXT_SECTION:
+              append_bytes_user(text_instruction_array, &value, kByteBytes, current_section);
+              break;
+            case RODATA_SECTION:
+              append_bytes_user(rodata_instruction_array, &value, kByteBytes, current_section);
+              break;
+            case DATA_SECTION:
+              append_bytes_user(data_instruction_array, &value, kByteBytes, current_section);
+              break;
+            case BSS_SECTION:
+              print_error();
+              fprintf(stderr, ".filb not allowed in .bss section\n");
+              return false;
+            default:
+              print_error();
+              fprintf(stderr, "cannot use .filb before specifying a section\n");
+              return false;
+          }
+        }
+      } else {
+        print_error();
+        fprintf(stderr, ".filb immediate must fit in an 8-bit value\n");
         return false;
       }
     }
@@ -2111,34 +2348,29 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       }
       if (0 <= imm && imm < ((long)1 << 32)){
         if (is_kernel){
-          for (int i = 0; i < imm; ++i) 
-            instruction_array_append(instructions->tail, 0);
-          pc += imm * 4;
+          append_zero_bytes_kernel(instructions->tail, (uint32_t)imm);
         } else {
           if (!ensure_valid_section(".space")) return false;
           switch (current_section) {
             case TEXT_SECTION:
-              for (int i = 0; i < imm; ++i) 
-                instruction_array_append(text_instruction_array, 0);
+              append_zero_bytes_user(text_instruction_array, (uint32_t)imm, current_section);
               break;
             case RODATA_SECTION:
-              for (int i = 0; i < imm; ++i) 
-                instruction_array_append(rodata_instruction_array, 0);
+              append_zero_bytes_user(rodata_instruction_array, (uint32_t)imm, current_section);
               break;
             case DATA_SECTION:
-              for (int i = 0; i < imm; ++i) 
-                instruction_array_append(data_instruction_array, 0);
+              append_zero_bytes_user(data_instruction_array, (uint32_t)imm, current_section);
               break;
             case BSS_SECTION:
-              bss_size += imm;
+              bss_size += (uint32_t)imm;
+              section_offsets[current_section] += (uint32_t)imm;
+              pc = section_bases[current_section] + section_offsets[current_section];
               break;
             default:
               print_error();
               fprintf(stderr, "cannot use .space before specifying a section\n");
               return false;
           }
-          section_offsets[current_section] += imm * 4;
-          pc = section_bases[current_section] + section_offsets[current_section];
         }
       } else {
         print_error();
@@ -2154,12 +2386,17 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
           return false;
         }
         pc = section_bases[current_section] + section_offsets[current_section];
+        if (section_offsets[current_section] % kWordBytes != 0){
+          return report_instruction_alignment_error((uint32_t)pc, "pc");
+        }
+      } else if (pc % kWordBytes != 0) {
+        return report_instruction_alignment_error((uint32_t)pc, "pc");
       }
       int instruction = consume_instruction(&success);
       if (success == FOUND) {
         if (is_kernel){
           instruction_array_append(instructions->tail, instruction);
-          pc += 4;
+          pc += kWordBytes;
         } else {
           if (current_section == RODATA_SECTION){
             print_warning("Instruction emitted in .rodata section");
@@ -2179,7 +2416,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
             default:
               break;
           }
-          section_offsets[current_section] += 4;
+          section_offsets[current_section] += kWordBytes;
           pc = section_bases[current_section] + section_offsets[current_section];
         }
       }
@@ -2250,7 +2487,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   }
 
   if (!is_kernel){
-    for (int i = 0; i < 4; ++i) section_sizes[i] = section_offsets[i];
+    section_sizes[TEXT_SECTION] = align_up(section_offsets[TEXT_SECTION], kWordBytes);
+    section_sizes[RODATA_SECTION] = align_up(section_offsets[RODATA_SECTION], kWordBytes);
+    section_sizes[DATA_SECTION] = align_up(section_offsets[DATA_SECTION], kWordBytes);
+    section_sizes[BSS_SECTION] = section_offsets[BSS_SECTION];
     compute_section_bases();
     for (int i = 0; i < num_files; ++i) adjust_label_map_for_sections(local_labels[i]);
     adjust_label_map_for_sections(global_labels);

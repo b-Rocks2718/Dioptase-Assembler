@@ -105,7 +105,7 @@ struct ElfProgramHeader* create_PHT(struct ProgramDescriptor* program){
 
   // data segment
   size_t data_size = cur_section->size * 4;
-  pht[2] = create_data_program_header(offset, vaddr, data_size, data_size + program->bss_size * 4);
+  pht[2] = create_data_program_header(offset, vaddr, data_size, data_size + program->bss_size);
 
   return pht;
 }

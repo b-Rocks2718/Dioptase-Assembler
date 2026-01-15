@@ -150,6 +150,12 @@ are only available for user mode programs.
 
 `.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`; `imm` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
 
-`.space n` - expands to `.fill 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
+`.fild imm` - fill 16 bit immediate
+
+`.filb imm` - fill 8 bit immediate
+
+`.fill`, `.fild`, and `.filb` emit bytes in little-endian order within the output word stream 
+
+`.space n` - expands to `.filb 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
 
 `.define NAME n` - macro for defining constants

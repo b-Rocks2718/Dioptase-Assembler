@@ -1,6 +1,6 @@
   .text
 
-  .space 20
+  .space 80
 # test that we correctly jump to _start
   .global _start
 _start:

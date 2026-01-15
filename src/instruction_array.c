@@ -3,6 +3,13 @@
 #include <assert.h>
 
 #include "instruction_array.h"
+#include <stdint.h>
+
+enum {
+  kWordBytes = 4,
+  kByteMask = 0xFF,
+  kByteStride = 1
+};
 
 /*
   Linked list for holding instruction arrays
@@ -65,6 +72,31 @@ void instruction_array_append(struct InstructionArray* arr, int value){
     
   arr->instructions[arr->size] = value;
   arr->size++;
+}
+
+// Purpose: Update a byte within an existing 32-bit word.
+// Inputs: word points to the word to update; byte_index is 0..3; value is the byte payload.
+// Outputs: None.
+// Invariants/Assumptions: byte_index is less than kWordBytes.
+static void set_word_byte(int* word, int byte_index, uint8_t value){
+  uint32_t mask = (uint32_t)kByteMask << (8 * byte_index);
+  uint32_t updated = ((uint32_t)(*word) & ~mask) | ((uint32_t)value << (8 * byte_index));
+  *word = (int)updated;
+}
+
+void instruction_array_append_double(struct InstructionArray* arr, uint16_t value, int pc){
+  // Little-endian: low byte goes at the lowest address.
+  instruction_array_append_byte(arr, (uint8_t)(value & kByteMask), pc);
+  instruction_array_append_byte(arr, (uint8_t)((value >> 8) & kByteMask), pc + kByteStride);
+}
+
+void instruction_array_append_byte(struct InstructionArray* arr, uint8_t value, int pc){
+  int byte_index = pc % kWordBytes;
+  if (byte_index == 0){
+    instruction_array_append(arr, 0);
+  }
+  assert(arr->size > 0);
+  set_word_byte(&arr->instructions[arr->size - 1], byte_index, value);
 }
 
 int instruction_array_get(struct InstructionArray* arr, size_t i){

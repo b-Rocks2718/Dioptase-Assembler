@@ -16,7 +16,7 @@ text_mid:
 .data
 data_val:
   .fill 0xAABBCCDD
-  .space 2
+  .space 8
 
 .text
 text_end:
@@ -24,7 +24,7 @@ text_end:
 
 .bss
 bss_buf:
-  .space 4
+  .space 16
 
 .text
 done:

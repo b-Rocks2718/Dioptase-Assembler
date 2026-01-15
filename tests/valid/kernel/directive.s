@@ -6,7 +6,12 @@
     .global _start
 _start:
     .fill 0xAAAA5555
-    .space 3
+    .fild 0xBEEF
+    .fild 0xDEAD
+    .fild 0xAAAA
+    .filb 0x7F
+    .filb 0x80
+    .space 12
 DATA:
     .fill 0x12345
     
