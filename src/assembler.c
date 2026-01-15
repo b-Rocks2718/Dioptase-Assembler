@@ -2470,7 +2470,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       }
     }
     else if (consume_keyword(".line")) {
-      // parse string, then line number
+      // Parse filename and line number; record the address of the next instruction.
       struct Slice* filename = consume_filename();
       if (filename == NULL){
         print_error();
@@ -2485,10 +2485,10 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         free(filename);
         return false;
       }
-      add_debug_line(debug_info_list, filename, line_num);
+      add_debug_line(debug_info_list, filename, line_num, (uint32_t)pc);
     }
     else if (consume_keyword(".local")) {
-      // parse string, then line number
+      // Parse name and bp offset; record the address where locals become visible.
       struct Slice* varname = consume_identifier();
       if (varname == NULL){
         print_error();
@@ -2503,7 +2503,14 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         free(varname);
         return false;
       }
-      add_debug_local(debug_info_list, varname, bp_offset);
+      long size = consume_literal(&result);
+      if (result != FOUND){
+        print_error();
+        fprintf(stderr, ".local directive requires a bp offset\n");
+        free(varname);
+        return false;
+      }
+      add_debug_local(debug_info_list, varname, bp_offset, size, (uint32_t)pc);
     }
     else if (consume_keyword(".align")) {
       enum ConsumeResult result;

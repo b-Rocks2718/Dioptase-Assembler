@@ -9,11 +9,13 @@ struct DebugInfoList* create_debug_info_list(void){
   return list;
 }
 
-void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset){
+void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr){
   // create new DebugLocal
   struct DebugLocal* local = malloc(sizeof(struct DebugLocal));
   local->name = name;
   local->offset = offset;
+  local->size = size;
+  local->addr = addr;
   // create new DebugEntry
   struct DebugEntry* entry = malloc(sizeof(struct DebugEntry));
   entry->type = DEBUG_INFO_LOCALS;
@@ -29,11 +31,12 @@ void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int o
   }
 }
 
-void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number){
+void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr){
   // create new DebugLine
   struct DebugLine* line = malloc(sizeof(struct DebugLine));
   line->file_name = file_name;
   line->line_number = line_number;
+  line->addr = addr;
   // create new DebugEntry
   struct DebugEntry* entry = malloc(sizeof(struct DebugEntry));
   entry->type = DEBUG_INFO_LINES;
@@ -54,12 +57,12 @@ void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list){
   while (current != NULL){
     if (current->type == DEBUG_INFO_LOCALS){
       struct DebugLocal* local = current->info.locals;
-      fprintf(fptr, "#local %.*s %d\n",
-              (int)local->name->len, local->name->start, local->offset);
+      fprintf(fptr, "#local %.*s %d %d %08X\n",
+              (int)local->name->len, local->name->start, local->offset, (int)local->size, local->addr);
     } else if (current->type == DEBUG_INFO_LINES){
       struct DebugLine* line = current->info.lines;
-      fprintf(fptr, "#line %.*s %d\n",
-              (int)line->file_name->len, line->file_name->start, line->line_number);
+      fprintf(fptr, "#line %.*s %d %08X\n",
+              (int)line->file_name->len, line->file_name->start, line->line_number, line->addr);
     }
     current = current->next;
   }

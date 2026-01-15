@@ -3,15 +3,19 @@
 
 #include "slice.h"
 #include <stdio.h>
+#include <stdint.h>
 
 struct DebugLocal {
   struct Slice* name;          // Name of the local variable
   int offset;                 // Offset from base pointer (BP)
+  size_t size;              // Size of the local variable in bytes
+  uint32_t addr;              // Address where this local becomes visible
 };
 
 struct DebugLine {
   struct Slice* file_name;      // Source file name
   int line_number;            // Line number in the source file
+  uint32_t addr;              // Address of the next instruction for this line
 };
 
 union DebugInfo {
@@ -37,9 +41,9 @@ struct DebugInfoList {
 
 struct DebugInfoList* create_debug_info_list(void);
 
-void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset);
+void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr);
 
-void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number);
+void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr);
 
 void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list);
 
