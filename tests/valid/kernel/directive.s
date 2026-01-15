@@ -20,6 +20,8 @@ DATA:
     .origin 0x500
 
     .fill 0x42
+    .filb 0xFF
+    .align 4
     movi r3, NUM
     add r0, r0, NUM
 

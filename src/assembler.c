@@ -74,6 +74,46 @@ static uint32_t align_up(uint32_t value, uint32_t align) {
   return value + (align - rem);
 }
 
+// Forward declaration for alignment parsing helpers.
+static long consume_define_or_literal(enum ConsumeResult* result, const char* context);
+
+// Purpose: Check whether a value is a power-of-two alignment.
+// Inputs: value is the candidate alignment in bytes.
+// Outputs: Returns true when value is a nonzero power of two.
+// Invariants/Assumptions: value is treated as a 32-bit unsigned alignment.
+static bool is_power_of_two_u32(uint32_t value){
+  return value != 0 && (value & (value - 1)) == 0;
+}
+
+// Purpose: Parse and validate a byte alignment value for .align.
+// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; directive labels errors.
+// Outputs: Returns true on success and fills alignment_out.
+// Invariants/Assumptions: alignment_out is non-NULL.
+static bool parse_alignment(enum ConsumeResult* result, const char* directive,
+                            uint32_t* alignment_out){
+  long imm = consume_define_or_literal(result, directive);
+  if (*result != FOUND){
+    if (*result == NOT_FOUND){
+      print_error();
+      fprintf(stderr, "Invalid %s value; expected integer literal or .define constant\n", directive);
+    }
+    return false;
+  }
+  if (imm <= 0 || imm >= ((long)1 << 32)){
+    print_error();
+    fprintf(stderr, "%s value must be a positive 32-bit integer\n", directive);
+    return false;
+  }
+  uint32_t alignment = (uint32_t)imm;
+  if (!is_power_of_two_u32(alignment)){
+    print_error();
+    fprintf(stderr, "%s value must be a power of two\n", directive);
+    return false;
+  }
+  *alignment_out = alignment;
+  return true;
+}
+
 // Purpose: Encode the least-significant bytes of value in little-endian order.
 // Inputs: value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
 // Outputs: out is filled with count bytes.
@@ -2037,7 +2077,22 @@ bool process_labels(char const* const prog){
           pc = section_offsets[current_section];
         }
         continue;
-      } else if (consume_keyword(".define")) {
+      }
+      else if (consume_keyword(".align")) {
+        enum ConsumeResult result;
+        uint32_t alignment = 0;
+        if (!parse_alignment(&result, ".align", &alignment)) return false;
+        if (is_kernel){
+          pc = align_up((uint32_t)pc, alignment);
+        } else {
+          if (!ensure_valid_section(".align")) return false;
+          section_offsets[current_section] =
+            align_up(section_offsets[current_section], alignment);
+          pc = section_offsets[current_section];
+        }
+        continue;
+      }
+      else if (consume_keyword(".define")) {
         bool success = true;
         record_define(&success);
         if (!success) return false;
@@ -2377,6 +2432,44 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
         return false;
       }
+    }
+    else if (consume_keyword(".align")) {
+      enum ConsumeResult result;
+      uint32_t alignment = 0;
+      if (!parse_alignment(&result, ".align", &alignment)) return false;
+
+      if (is_kernel){
+        uint32_t current = (uint32_t)pc;
+        uint32_t aligned = align_up(current, alignment);
+        uint32_t pad = aligned - current;
+        append_zero_bytes_kernel(instructions->tail, pad);
+      } else {
+        if (!ensure_valid_section(".align")) return false;
+        uint32_t current = section_offsets[current_section];
+        uint32_t aligned = align_up(current, alignment);
+        uint32_t pad = aligned - current;
+        switch (current_section) {
+          case TEXT_SECTION:
+            append_zero_bytes_user(text_instruction_array, pad, current_section);
+            break;
+          case RODATA_SECTION:
+            append_zero_bytes_user(rodata_instruction_array, pad, current_section);
+            break;
+          case DATA_SECTION:
+            append_zero_bytes_user(data_instruction_array, pad, current_section);
+            break;
+          case BSS_SECTION:
+            bss_size += pad;
+            section_offsets[current_section] += pad;
+            pc = section_bases[current_section] + section_offsets[current_section];
+            break;
+          default:
+            print_error();
+            fprintf(stderr, "cannot use .align before specifying a section\n");
+            return false;
+        }
+      }
+      continue;
     } else {
       if (!is_kernel){
         if (!ensure_valid_section("instruction")) return false;

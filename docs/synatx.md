@@ -156,6 +156,8 @@ are only available for user mode programs.
 
 `.fill`, `.fild`, and `.filb` emit bytes in little-endian order within the output word stream 
 
+.align n - align the current location to the next multiple of `n` bytes (power of 2), emitting zero bytes as padding; in `.bss` this only increases the size without emitting data
+
 `.space n` - expands to `.filb 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
 
 `.define NAME n` - macro for defining constants
