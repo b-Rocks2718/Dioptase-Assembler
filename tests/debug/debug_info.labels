@@ -1,0 +1,4 @@
+#line file.c 4
+#line file.c 8
+#local x -4
+#local y -8

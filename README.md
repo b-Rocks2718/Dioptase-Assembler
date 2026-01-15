@@ -19,7 +19,7 @@ Assembler expects a global `_start` label to be defined in one of the source fil
 #### Supported Flags 
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
 `-o` to name the output file (./a.hex is the default)  
-`-debug` to append `#label` annotations (label name + address) to the output and emit a `.debug` file instead of `.hex`  
+`-g` to output debug info  
 `-kernel` to allow the use of privileged instructions (normally disallowed) and output a kernel-mode hex file instead of an ELF hex file  
 `-crt` to prepend `crt/crt0.s` and `crt/arithmetic.s` to the input list so `_start` is emitted first  
 

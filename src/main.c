@@ -11,6 +11,7 @@
 #include "label_list.h"
 #include "preprocessor.h"
 #include "elf.h"
+#include "debug.h"
 
 // Purpose: Environment variable pointing to the CRT source directory.
 // Inputs/Outputs: Read via getenv when -crt is requested.
@@ -133,7 +134,7 @@ int main(int argc, const char *const *const argv){
       ++i;
     } else if (strcmp(argv[i], "-kernel") == 0){
       is_kernel = true;
-    } else if (strcmp(argv[i], "-debug") == 0){
+    } else if (strcmp(argv[i], "-g") == 0){
       debug_labels = true;
     } else if (strcmp(argv[i], "-crt") == 0){
       include_crt = true;
@@ -147,7 +148,7 @@ int main(int argc, const char *const *const argv){
       }
       cli_defines[num_defines++] = def;
     } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -debug, -crt, or -DNAME=value\n", argv[i]);
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -g, -crt, or -DNAME=value\n", argv[i]);
       free(file_names);
       free(cli_defines);
       exit(1);
@@ -283,13 +284,15 @@ int main(int argc, const char *const *const argv){
 
   set_cli_defines(num_defines, cli_defines);
   struct LabelList* labels = NULL;
+  struct DebugInfoList* labels_c = NULL;
   struct ProgramDescriptor* program = assemble(
     num_files,
     file_names,
     is_kernel,
     input_args,
     preprocessed,
-    debug_labels ? &labels : NULL
+    debug_labels ? &labels : NULL,
+    debug_labels ? &labels_c : NULL
   );
   
   for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
@@ -339,6 +342,8 @@ int main(int argc, const char *const *const argv){
   if (debug_labels){
     fprint_label_list(fptr, labels);
     destroy_label_list(labels);
+    fprint_debug_info_list(fptr, labels_c);
+    destroy_debug_info_list(labels_c);
   }
 
   fclose(fptr);

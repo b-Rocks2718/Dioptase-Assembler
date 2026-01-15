@@ -14,6 +14,7 @@
 #include "preprocessor.h"
 #include "interrupts.h"
 #include "elf.h"
+#include "debug.h"
 
 /*
   Two-pass assembler.
@@ -36,6 +37,8 @@ unsigned bss_size = 0;
 static uint32_t section_offsets[4];
 static uint32_t section_sizes[4];
 static uint32_t section_bases[4];
+
+static struct DebugInfoList* debug_info_list = NULL;
 
 // does the file wish to use pivileges instructions?
 bool is_kernel = false;
@@ -299,7 +302,7 @@ static bool apply_cli_defines(void){
     struct Slice* label = malloc(sizeof(struct Slice));
     label->start = def;
     label->len = name_len;
-    hash_map_insert(local_defines[current_file_index], label, value, true);
+    hash_map_insert(local_defines[current_file_index], label, value, true, true);
   }
   return true;
 }
@@ -452,6 +455,28 @@ struct Slice* consume_identifier(void) {
       i += 1;
       // then followed by letters, number, underscores, and periods
     } while(isalnum(current[i]) || current[i] == '_' || current[i] == '.');
+
+    struct Slice* slice = malloc(sizeof(struct Slice));
+    slice->start = current;
+    slice->len = i;
+    current += i;
+
+    return slice;
+  } else {
+    return NULL;
+  }
+}
+
+// attempt to consume a filename, has no effect if a match is not found
+struct Slice* consume_filename(void) {
+  skip();
+  size_t i = 0;
+  // filenames begin with a letter or underscore
+  if (isalpha(current[i]) || current[i] == '_') {
+    do {
+      i += 1;
+      // then followed by letters, number, underscores, and periods, and slashes
+    } while(isalnum(current[i]) || current[i] == '_' || current[i] == '.' || current[i] == '/');
 
     struct Slice* slice = malloc(sizeof(struct Slice));
     slice->start = current;
@@ -1706,7 +1731,7 @@ void record_define(bool* success){
     *success = false;
     return;
   }
-  hash_map_insert(local_defines[current_file_index], label, imm, true);  
+  hash_map_insert(local_defines[current_file_index], label, imm, true, true);  
 }
 
 // consumes a single instruction and converts it to binary or hex
@@ -1871,7 +1896,7 @@ bool process_labels(char const* const prog){
           make_defined(local_labels[current_file_index], label, label_value);
         }
       } else {
-        hash_map_insert(local_labels[current_file_index], label, label_value, true);
+        hash_map_insert(local_labels[current_file_index], label, label_value, true, current_section != TEXT_SECTION);
         label_was_used = true;
       }
 
@@ -1898,11 +1923,12 @@ bool process_labels(char const* const prog){
           // Track per-file global declarations to detect duplicate exports.
           if (!hash_map_contains(local_globals[current_file_index], label)){
             struct Slice* label_copy = clone_slice(label);
-            hash_map_insert(local_globals[current_file_index], label_copy, 0, false);
+            hash_map_insert(local_globals[current_file_index], label_copy, 0, false,
+              current_section != TEXT_SECTION); // mark as data if not in text section
           }
           if (!hash_map_contains(global_labels, label)){
             struct Slice* label_copy = clone_slice(label);
-            hash_map_insert(global_labels, label_copy, 0, false);
+            hash_map_insert(global_labels, label_copy, 0, false, current_section != TEXT_SECTION);
           }
 
           if (label_has_definition(local_labels[current_file_index], label)){
@@ -2096,6 +2122,16 @@ bool process_labels(char const* const prog){
         bool success = true;
         record_define(&success);
         if (!success) return false;
+        continue;
+      }
+      else if (consume_keyword(".line")) {
+        // handled in second pass
+        skip_line();
+        continue;
+      }
+      else if (consume_keyword(".local")) {
+        // handled in second pass
+        skip_line();
         continue;
       }
       
@@ -2433,6 +2469,42 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
+    else if (consume_keyword(".line")) {
+      // parse string, then line number
+      struct Slice* filename = consume_filename();
+      if (filename == NULL){
+        print_error();
+        fprintf(stderr, ".line directive requires a filename\n");
+        return false;
+      }
+      enum ConsumeResult result;
+      long line_num = consume_literal(&result);
+      if (result != FOUND){
+        print_error();
+        fprintf(stderr, ".line directive requires a line number\n");
+        free(filename);
+        return false;
+      }
+      add_debug_line(debug_info_list, filename, line_num);
+    }
+    else if (consume_keyword(".local")) {
+      // parse string, then line number
+      struct Slice* varname = consume_identifier();
+      if (varname == NULL){
+        print_error();
+        fprintf(stderr, ".local directive requires a variable name\n");
+        return false;
+      }
+      enum ConsumeResult result;
+      long bp_offset = consume_literal(&result);
+      if (result != FOUND){
+        print_error();
+        fprintf(stderr, ".local directive requires a bp offset\n");
+        free(varname);
+        return false;
+      }
+      add_debug_local(debug_info_list, varname, bp_offset);
+    }
     else if (consume_keyword(".align")) {
       enum ConsumeResult result;
       uint32_t alignment = 0;
@@ -2532,7 +2604,7 @@ static void append_labels_from_map(struct HashMap* map, struct LabelList* labels
     while (entry != NULL){
       if (entry->is_defined){
         uint32_t addr = (uint32_t)(entry->value + offset);
-        label_list_append(labels, entry->key->start, entry->key->len, addr);
+        label_list_append(labels, entry->key->start, entry->key->len, addr, entry->is_data);
       }
       entry = entry->next;
     }
@@ -2541,7 +2613,8 @@ static void append_labels_from_map(struct HashMap* map, struct LabelList* labels
 
 // assemble an entire program
 struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
-  const char *const *const argv, char** files, struct LabelList** labels_out){
+  const char *const *const argv, char** files, struct LabelList** labels_out,
+  struct DebugInfoList** labels_out_c){
 
   is_kernel = kernel;
   pass_number = 1;
@@ -2553,7 +2626,12 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   reset_section_offsets();
   for (int i = 0; i < 4; ++i) section_sizes[i] = 0;
 
+  debug_info_list = create_debug_info_list();
+
   if (labels_out != NULL) *labels_out = NULL;
+  if (labels_out_c != NULL) {
+    *labels_out_c = debug_info_list;
+  }
 
   current_file_index = 0;
 

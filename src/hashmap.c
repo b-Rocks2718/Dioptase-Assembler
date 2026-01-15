@@ -19,35 +19,36 @@ struct HashMap* create_hash_map(size_t num_buckets){
   return hmap;
 }
 
-struct HashEntry* create_hash_entry(struct Slice* key, long value, bool is_def){
+struct HashEntry* create_hash_entry(struct Slice* key, long value, bool is_def, bool is_data){
   struct HashEntry* entry = malloc(sizeof(struct HashEntry));
 
   entry->key = key;
   entry->value = value;
   entry->is_defined = is_def;
+  entry->is_data = is_data;
   entry->next = NULL;
 
   return entry;
 }
 
-void hash_entry_insert(struct HashEntry* entry, struct Slice* key, long value, bool is_def){
+void hash_entry_insert(struct HashEntry* entry, struct Slice* key, long value, bool is_def, bool is_data){
   if (compare_slice_to_slice(entry->key, key)){
     entry->value = value;
     free(key);
   } else if (entry->next == NULL){
-    entry->next = create_hash_entry(key, value, is_def);
+    entry->next = create_hash_entry(key, value, is_def, is_data);
   } else {
-    hash_entry_insert(entry->next, key, value, is_def);
+    hash_entry_insert(entry->next, key, value, is_def, is_data);
   }
 }
 
-void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool is_def){
+void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool is_def, bool is_data){
   size_t hash = hash_slice(key) % hmap->size;
   
   if ((hmap->arr[hash]) == NULL){
-    hmap->arr[hash] = create_hash_entry(key, value, is_def);
+    hmap->arr[hash] = create_hash_entry(key, value, is_def, is_data);
   } else {
-    hash_entry_insert(hmap->arr[hash], key, value, is_def);
+    hash_entry_insert(hmap->arr[hash], key, value, is_def, is_data);
   }
 }
 

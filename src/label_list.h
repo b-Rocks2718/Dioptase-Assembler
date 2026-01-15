@@ -7,6 +7,7 @@
 
 struct LabelEntry {
   char* name;
+  bool is_data;
   uint32_t addr;
 };
 
@@ -18,7 +19,7 @@ struct LabelList {
 
 struct LabelList* create_label_list(size_t capacity);
 
-void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr);
+void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr, bool is_data);
 
 void destroy_label_list(struct LabelList* list);
 

@@ -13,15 +13,16 @@ struct LabelList* create_label_list(size_t capacity){
   return list;
 }
 
-static bool label_entry_matches(const struct LabelEntry* entry, const char* name, size_t len, uint32_t addr){
+static bool label_entry_matches(const struct LabelEntry* entry, const char* name, size_t len, uint32_t addr, bool is_data){
   if (entry->addr != addr) return false;
+  if (entry->is_data != is_data) return false;
   if (strlen(entry->name) != len) return false;
   return strncmp(entry->name, name, len) == 0;
 }
 
-void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr){
+void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr, bool is_data){
   for (size_t i = 0; i < list->size; ++i){
-    if (label_entry_matches(&list->entries[i], name, len, addr)) return;
+    if (label_entry_matches(&list->entries[i], name, len, addr, is_data)) return;
   }
 
   if (list->size == list->capacity){
@@ -35,6 +36,7 @@ void label_list_append(struct LabelList* list, const char* name, size_t len, uin
 
   list->entries[list->size].name = name_copy;
   list->entries[list->size].addr = addr;
+  list->entries[list->size].is_data = is_data;
   list->size++;
 }
 
@@ -50,6 +52,6 @@ void destroy_label_list(struct LabelList* list){
 void fprint_label_list(FILE* ptr, const struct LabelList* list){
   if (list == NULL) return;
   for (size_t i = 0; i < list->size; ++i){
-    fprintf(ptr, "#label %s %08X\n", list->entries[i].name, list->entries[i].addr);
+    fprintf(ptr, "#%s %s %08X\n", list->entries[i].is_data ? "data" : "label", list->entries[i].name, list->entries[i].addr);
   }
 }

@@ -9,6 +9,7 @@ struct HashEntry{
   struct Slice* key;
   long value;
   bool is_defined;
+  bool is_data;
   struct HashEntry* next;
 };
 
@@ -19,7 +20,7 @@ struct HashMap{
 
 struct HashMap* create_hash_map(size_t numBuckets);
 
-void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool is_def);
+void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool is_def, bool is_data);
 
 long hash_map_get(struct HashMap* hmap, struct Slice* key);
 

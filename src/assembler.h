@@ -2,6 +2,7 @@
 #define ASSEMBLER_H
 
 #include "stdbool.h"
+#include "debug.h"
 
 extern char const * current_file;
 extern char const * current;
@@ -15,7 +16,8 @@ extern bool is_kernel;
 struct LabelList;
 
 struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kernel,
-  const char *const *const argv, char** files, struct LabelList** labels_out);
+  const char *const *const argv, char** files, struct LabelList** labels_out,
+  struct DebugInfoList** labels_c_out);
 
 void set_cli_defines(int count, const char* const* defines);
 

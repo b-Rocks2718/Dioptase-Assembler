@@ -194,9 +194,9 @@ define RUN_TESTS
 	for t in $(DEBUG_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
 	  rm -f tests/debug/$$t.debug; \
-	  debug_flags="-debug"; \
+	  debug_flags="-g"; \
 	  case "$$t" in \
-	    *_kernel) debug_flags="-debug -kernel";; \
+	    *_kernel) debug_flags="-g -kernel";; \
 	  esac; \
 	  if timeout 1s $(TEST_EXEC) $$debug_flags tests/debug/$$t.s -o tests/debug/$$t.debug >/dev/null 2>&1; then \
 	    if [ -f tests/debug/$$t.debug ]; then \
