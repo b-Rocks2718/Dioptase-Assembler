@@ -4,6 +4,7 @@
 #include "slice.h"
 #include <stdio.h>
 #include <stdint.h>
+#include <stddef.h>
 
 struct DebugLocal {
   struct Slice* name;          // Name of the local variable

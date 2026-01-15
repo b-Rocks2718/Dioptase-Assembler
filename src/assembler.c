@@ -2503,14 +2503,20 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         free(varname);
         return false;
       }
-      long size = consume_literal(&result);
+      long size_value = consume_literal(&result);
       if (result != FOUND){
         print_error();
-        fprintf(stderr, ".local directive requires a bp offset\n");
+        fprintf(stderr, ".local directive requires a size in bytes\n");
         free(varname);
         return false;
       }
-      add_debug_local(debug_info_list, varname, bp_offset, size, (uint32_t)pc);
+      if (size_value <= 0 || size_value > UINT32_MAX) {
+        print_error();
+        fprintf(stderr, ".local directive size must be a positive 32-bit value\n");
+        free(varname);
+        return false;
+      }
+      add_debug_local(debug_info_list, varname, bp_offset, (size_t)size_value, (uint32_t)pc);
     }
     else if (consume_keyword(".align")) {
       enum ConsumeResult result;

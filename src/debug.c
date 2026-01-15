@@ -57,8 +57,8 @@ void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list){
   while (current != NULL){
     if (current->type == DEBUG_INFO_LOCALS){
       struct DebugLocal* local = current->info.locals;
-      fprintf(fptr, "#local %.*s %d %d %08X\n",
-              (int)local->name->len, local->name->start, local->offset, (int)local->size, local->addr);
+      fprintf(fptr, "#local %.*s %d %zu %08X\n",
+              (int)local->name->len, local->name->start, local->offset, local->size, local->addr);
     } else if (current->type == DEBUG_INFO_LINES){
       struct DebugLine* line = current->info.lines;
       fprintf(fptr, "#line %.*s %d %08X\n",
