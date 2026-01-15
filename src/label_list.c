@@ -55,3 +55,14 @@ void fprint_label_list(FILE* ptr, const struct LabelList* list){
     fprintf(ptr, "#%s %s %08X\n", list->entries[i].is_data ? "data" : "label", list->entries[i].name, list->entries[i].addr);
   }
 }
+
+// Purpose: Emit label metadata for kernel outputs (no data/text distinction).
+// Inputs: ptr is the output file; list contains label entries with addresses.
+// Outputs: Writes "#label <name> <addr>" lines, ignoring is_data.
+// Invariants/Assumptions: list entries are unique by name/address.
+void fprint_label_list_kernel(FILE* ptr, const struct LabelList* list){
+  if (list == NULL) return;
+  for (size_t i = 0; i < list->size; ++i){
+    fprintf(ptr, "#label %s %08X\n", list->entries[i].name, list->entries[i].addr);
+  }
+}

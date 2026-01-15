@@ -340,7 +340,11 @@ int main(int argc, const char *const *const argv){
   
   // Append label metadata for the debugger.
   if (debug_labels){
-    fprint_label_list(fptr, labels);
+    if (is_kernel) {
+      fprint_label_list_kernel(fptr, labels);
+    } else {
+      fprint_label_list(fptr, labels);
+    }
     destroy_label_list(labels);
     fprint_debug_info_list(fptr, labels_c);
     destroy_debug_info_list(labels_c);

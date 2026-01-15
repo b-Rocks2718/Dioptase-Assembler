@@ -24,5 +24,6 @@ void label_list_append(struct LabelList* list, const char* name, size_t len, uin
 void destroy_label_list(struct LabelList* list);
 
 void fprint_label_list(FILE* ptr, const struct LabelList* list);
+void fprint_label_list_kernel(FILE* ptr, const struct LabelList* list);
 
 #endif  // LABEL_LIST_H

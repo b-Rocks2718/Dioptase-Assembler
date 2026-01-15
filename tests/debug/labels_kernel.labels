@@ -1,5 +1,5 @@
-#data _start 0000040C
-#data k_loop 00000410
-#data k_mid 00000418
-#data origin_label 00000600
-#data k_end 00000604
+#label _start 0000040C
+#label k_loop 00000410
+#label k_mid 00000418
+#label origin_label 00000600
+#label k_end 00000604
