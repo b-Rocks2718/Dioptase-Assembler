@@ -148,7 +148,7 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 `.text`, `.data`, `.rodata`, and `.bss` will automatically create sections starting at the next available address, and 
 are only available for user mode programs.
 
-`.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`; `imm` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
+`.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`; `imm` may be an integer literal, a label (absolute address), or a `.define`/`-D` constant
 
 `.fild imm` - fill 16 bit immediate
 

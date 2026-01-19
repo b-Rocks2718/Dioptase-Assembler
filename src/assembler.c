@@ -745,6 +745,59 @@ static long consume_define_or_literal(enum ConsumeResult* result, const char* co
   return imm;
 }
 
+// Purpose: Parse a numeric literal, .define constant, or label absolute address.
+// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; context labels the directive for errors.
+// Outputs: Returns the literal, constant, or label address when FOUND; returns 0 otherwise.
+// Invariants/Assumptions: label maps are absolute-addressed in pass 2.
+static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
+                                                   const char* context) {
+  long imm = consume_literal(result);
+  if (*result != NOT_FOUND) {
+    return imm;
+  }
+
+  struct Slice* name = consume_identifier();
+  if (name == NULL) {
+    *result = NOT_FOUND;
+    return 0;
+  }
+
+  if (hash_map_contains(local_defines[current_file_index], name)) {
+    imm = hash_map_get(local_defines[current_file_index], name);
+    *result = FOUND;
+    free(name);
+    return imm;
+  }
+
+  // Allow labels in pass 1 without forcing a definition yet.
+  if (pass_number == 1) {
+    *result = FOUND;
+    free(name);
+    return 0;
+  }
+
+  if (label_has_definition(local_labels[current_file_index], name)) {
+    imm = hash_map_get(local_labels[current_file_index], name);
+    *result = FOUND;
+  } else if (label_has_definition(global_labels, name)) {
+    imm = hash_map_get(global_labels, name);
+    *result = FOUND;
+  } else {
+    print_error();
+    if (context != NULL) {
+      fprintf(stderr, "%s constant/label \"", context);
+    } else {
+      fprintf(stderr, "Constant/label \"");
+    }
+    print_slice_err(name);
+    fprintf(stderr, "\" has not been defined\n");
+    *result = ERROR;
+  }
+
+  free(name);
+  return imm;
+}
+
 long consume_label_imm(enum ConsumeResult* result){
   struct Slice* label = consume_identifier();
   long imm = 0;
@@ -2015,11 +2068,11 @@ bool process_labels(char const* const prog){
       }
       else if (consume_keyword(".fill")) {
         enum ConsumeResult result; 
-        consume_define_or_literal(&result, ".fill");
+        consume_define_or_literal_or_label_abs(&result, ".fill");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
-            fprintf(stderr, "Invalid .fill immediate; expected integer literal or .define constant\n");
+            fprintf(stderr, "Invalid .fill immediate; expected integer literal, label, or .define constant\n");
           }
           return false;
         }
@@ -2278,11 +2331,11 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if (consume_keyword(".fill")) {
       enum ConsumeResult result; 
-      long imm = consume_define_or_literal(&result, ".fill");
+      long imm = consume_define_or_literal_or_label_abs(&result, ".fill");
       if (result != FOUND){
         if (result == NOT_FOUND){
           print_error();
-          fprintf(stderr, "Invalid .fill immediate; expected integer literal or .define constant\n");
+          fprintf(stderr, "Invalid .fill immediate; expected integer literal, label, or .define constant\n");
         }
         return false;
       }
