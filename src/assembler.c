@@ -778,9 +778,13 @@ static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
 
   if (label_has_definition(local_labels[current_file_index], name)) {
     imm = hash_map_get(local_labels[current_file_index], name);
+    // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
+    if (is_kernel) imm += 0x400;
     *result = FOUND;
   } else if (label_has_definition(global_labels, name)) {
     imm = hash_map_get(global_labels, name);
+    // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
+    if (is_kernel) imm += 0x400;
     *result = FOUND;
   } else {
     print_error();
