@@ -29,6 +29,12 @@ void print_instruction_array_list(struct InstructionArrayList* list);
 
 void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw);
 
+// Purpose: Write instruction arrays as raw little-endian bytes.
+// Inputs: ptr is the binary output; list is the instruction arrays; include_origin_padding
+//         inserts zero bytes so each array begins at its origin address.
+// Outputs: Writes raw bytes to ptr.
+// Invariants/Assumptions: Origins are non-decreasing when include_origin_padding is true.
+void fwrite_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool include_origin_padding);
 
 struct InstructionArray* create_instruction_array(size_t capacity, int origin);
 

@@ -41,6 +41,9 @@ INVALID_TESTS := $(patsubst tests/invalid/%.s,%, $(INVALID_SRCS))
 DEBUG_SRCS := $(wildcard tests/debug/*.s)
 DEBUG_TESTS := $(patsubst tests/debug/%.s,%, $(DEBUG_SRCS))
 
+BIN_USER_OKS := $(wildcard tests/bin/user/*.ok)
+BIN_USER_TESTS := $(patsubst tests/bin/user/%.ok,%, $(BIN_USER_OKS))
+
 .PRECIOUS: tests/valid/user/%.hex tests/valid/kernel/%.hex tests/valid/user/lib/%.hex tests/valid/kernel/lib/%.hex
 
 # Link
@@ -84,18 +87,40 @@ tests/valid/kernel/lib/%.hex: tests/valid/kernel/lib/%.s tests/valid/kernel/lib/
 	@echo "Assembling tests/valid/kernel/lib/$*.s -> tests/valid/kernel/lib/$*.hex"
 	@$(DEBUG_EXEC) -kernel tests/valid/kernel/lib/lib.s tests/valid/kernel/lib/$*.s -o $@
 
+# for each bin test, produce tests/bin/user/NAME.bin
+tests/bin/user/%.bin: tests/valid/user/%.s $(DEBUG_EXEC) | dirs-debug dirs-bin
+	@echo "Assembling tests/valid/user/$*.s -> tests/bin/user/$*.bin"
+	@$(DEBUG_EXEC) -bin $< -o $@
+
 # Run the test suite.
 define RUN_TESTS
 	@GREEN="\033[0;32m"; \
 	RED="\033[0;31m"; \
 	YELLOW="\033[0;33m"; \
 	NC="\033[0m"; \
-	passed=0; total=$$(( $(words $(VALID_USER_TESTS)) + $(words $(VALID_KERNEL_TESTS)) + $(words $(VALID_USER_LIB_TESTS)) + $(words $(VALID_KERNEL_LIB_TESTS)) + $(words $(INVALID_TESTS)) + $(words $(DEBUG_TESTS)) + 1)); \
+	passed=0; total=$$(( $(words $(VALID_USER_TESTS)) + $(words $(VALID_KERNEL_TESTS)) + $(words $(VALID_USER_LIB_TESTS)) + $(words $(VALID_KERNEL_LIB_TESTS)) + $(words $(BIN_USER_TESTS)) + $(words $(INVALID_TESTS)) + $(words $(DEBUG_TESTS)) + 1)); \
 	echo "Running $(words $(VALID_USER_TESTS)) user tests:"; \
 	for t in $(VALID_USER_TESTS); do \
 	  printf "%s %-20s " '-' "$$t"; \
 	  if timeout 1s $(TEST_EXEC) tests/valid/user/$$t.s -o tests/valid/user/$$t.hex >/dev/null 2>&1; then \
 	    if cmp --silent tests/valid/user/$$t.hex tests/valid/user/$$t.ok; then \
+	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  else \
+	    if [ $$? -eq 124 ]; then \
+	      echo "$$YELLOW TIMEOUT $$NC"; \
+	    else \
+	      echo "$$RED FAIL $$NC"; \
+	    fi; \
+	  fi; \
+	done; \
+	echo "\nRunning $(words $(BIN_USER_TESTS)) user bin tests:"; \
+	for t in $(BIN_USER_TESTS); do \
+	  printf "%s %-20s " '-' "$$t"; \
+	  if timeout 1s $(TEST_EXEC) -bin tests/valid/user/$$t.s -o tests/bin/user/$$t.bin >/dev/null 2>&1; then \
+	    if cmp --silent tests/bin/user/$$t.bin tests/bin/user/$$t.ok; then \
 	      echo "$$GREEN PASS $$NC"; passed=$$((passed+1)); \
 	    else \
 	      echo "$$RED FAIL $$NC"; \
@@ -257,6 +282,9 @@ dirs-debug:
 dirs-release:
 	@mkdir -p $(RELEASE_OBJ_DIR) $(RELEASE_DIR)
 
+dirs-bin:
+	@mkdir -p tests/bin/user
+
 # Remove everything but the executable
 clean:
 	rm -rf $(DEBUG_OBJ_DIR) $(RELEASE_OBJ_DIR)
@@ -268,8 +296,10 @@ clean:
 	rm -f tests/invalid/lib/*.hex
 	rm -f tests/debug/*.debug
 	rm -f tests/debug/*.hex
+	rm -f tests/bin/user/*.bin
 	rm -f *.gcno *.gcda *.gcov
 	rm -f coverage.info
+	rm -f a.bin
 	rm -f a.hex
 
 # Remove everything

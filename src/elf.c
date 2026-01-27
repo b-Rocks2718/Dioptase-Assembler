@@ -28,6 +28,14 @@ static void fprint_word_bytes(FILE* ptr, const uint8_t* bytes, size_t len){
   }
 }
 
+// Purpose: Write a byte buffer directly to a file.
+// Inputs: ptr is the output file; bytes points to the payload; len is the byte count.
+// Outputs: Writes len bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+static void fwrite_bytes(FILE* ptr, const uint8_t* bytes, size_t len){
+  fwrite(bytes, 1, len, ptr);
+}
+
 void destroy_program_descriptor(struct ProgramDescriptor* program){
   destroy_instruction_array_list(program->sections);
   free(program);
@@ -196,5 +204,49 @@ void fprint_pht(FILE* ptr, struct ElfProgramHeader* pht){
 
     assert(offset == sizeof(bytes));
     fprint_word_bytes(ptr, bytes, sizeof(bytes));
+  }
+}
+
+void fwrite_elf_header(FILE* ptr, const struct ElfHeader* header){
+  uint8_t bytes[52];
+  size_t offset = 0;
+
+  memcpy(bytes, header->e_ident, sizeof(header->e_ident));
+  offset += sizeof(header->e_ident);
+
+  write_u16_le(bytes, &offset, header->e_type);
+  write_u16_le(bytes, &offset, header->e_machine);
+  write_u32_le(bytes, &offset, header->e_version);
+  write_u32_le(bytes, &offset, header->e_entry);
+  write_u32_le(bytes, &offset, header->e_phoff);
+  write_u32_le(bytes, &offset, header->e_shoff);
+  write_u32_le(bytes, &offset, header->e_flags);
+  write_u16_le(bytes, &offset, header->e_ehsize);
+  write_u16_le(bytes, &offset, header->e_phentsize);
+  write_u16_le(bytes, &offset, header->e_phnum);
+  write_u16_le(bytes, &offset, header->e_shentsize);
+  write_u16_le(bytes, &offset, header->e_shnum);
+  write_u16_le(bytes, &offset, header->e_shstrndx);
+
+  assert(offset == sizeof(bytes));
+  fwrite_bytes(ptr, bytes, sizeof(bytes));
+}
+
+void fwrite_pht(FILE* ptr, const struct ElfProgramHeader* pht){
+  for (int i = 0; i < 3; ++i){
+    uint8_t bytes[32];
+    size_t offset = 0;
+
+    write_u32_le(bytes, &offset, pht[i].p_type);
+    write_u32_le(bytes, &offset, pht[i].p_offset);
+    write_u32_le(bytes, &offset, pht[i].p_vaddr);
+    write_u32_le(bytes, &offset, pht[i].p_paddr);
+    write_u32_le(bytes, &offset, pht[i].p_filesz);
+    write_u32_le(bytes, &offset, pht[i].p_memsz);
+    write_u32_le(bytes, &offset, pht[i].p_flags);
+    write_u32_le(bytes, &offset, pht[i].p_align);
+
+    assert(offset == sizeof(bytes));
+    fwrite_bytes(ptr, bytes, sizeof(bytes));
   }
 }

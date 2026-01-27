@@ -54,4 +54,16 @@ void fprint_elf_header(FILE* ptr, struct ElfHeader* header);
 
 void fprint_pht(FILE* ptr, struct ElfProgramHeader* pht);
 
+// Purpose: Write the ELF header as raw little-endian bytes.
+// Inputs: ptr is the binary output; header describes the ELF header fields.
+// Outputs: Writes the ELF header bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+void fwrite_elf_header(FILE* ptr, const struct ElfHeader* header);
+
+// Purpose: Write the program header table as raw little-endian bytes.
+// Inputs: ptr is the binary output; pht points to 3 program header entries.
+// Outputs: Writes the program header table bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+void fwrite_pht(FILE* ptr, const struct ElfProgramHeader* pht);
+
 #endif  // ELF_H

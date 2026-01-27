@@ -46,6 +46,59 @@ void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list,
   fprint_instruction_array(ptr, list->head, raw);
 }
 
+// Purpose: Write a 32-bit word in little-endian byte order.
+// Inputs: ptr is the output file; value is the word to write.
+// Outputs: Writes exactly 4 bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+static void write_u32_le(FILE* ptr, uint32_t value){
+  uint8_t bytes[kWordBytes];
+  bytes[0] = (uint8_t)(value & kByteMask);
+  bytes[1] = (uint8_t)((value >> 8) & kByteMask);
+  bytes[2] = (uint8_t)((value >> 16) & kByteMask);
+  bytes[3] = (uint8_t)((value >> 24) & kByteMask);
+  fwrite(bytes, 1, kWordBytes, ptr);
+}
+
+// Purpose: Emit zero padding bytes.
+// Inputs: ptr is the output file; count is the number of zero bytes to write.
+// Outputs: Writes count zero bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+static void write_zero_bytes(FILE* ptr, size_t count){
+  enum { kZeroChunkBytes = 256 };
+  static const uint8_t zeros[kZeroChunkBytes] = {0};
+  while (count > 0){
+    size_t chunk = count > kZeroChunkBytes ? kZeroChunkBytes : count;
+    fwrite(zeros, 1, chunk, ptr);
+    count -= chunk;
+  }
+}
+
+// Purpose: Write instruction words for a single array.
+// Inputs: ptr is the output file; arr is the instruction array to emit.
+// Outputs: Writes arr->size words as raw bytes to ptr.
+// Invariants/Assumptions: ptr is open for binary output.
+static void write_instruction_array_words(FILE* ptr, const struct InstructionArray* arr){
+  for (size_t i = 0; i < arr->size; ++i){
+    write_u32_le(ptr, (uint32_t)arr->instructions[i]);
+  }
+}
+
+void fwrite_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool include_origin_padding){
+  uint32_t cursor = 0;
+  for (struct InstructionArray* arr = list->head; arr != NULL; arr = arr->next){
+    uint32_t origin = (uint32_t)arr->origin;
+    if (include_origin_padding){
+      assert(origin >= cursor);
+      if (origin > cursor){
+        write_zero_bytes(ptr, (size_t)(origin - cursor));
+      }
+      cursor = origin;
+    }
+    write_instruction_array_words(ptr, arr);
+    cursor += (uint32_t)(arr->size * kWordBytes);
+  }
+}
+
 /*
   Dynamic array used for holding instructions
 */

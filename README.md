@@ -19,9 +19,15 @@ Assembler expects a global `_start` label to be defined in one of the source fil
 #### Supported Flags 
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  
 `-o` to name the output file (./a.hex is the default)  
+`-bin` to write a raw binary image instead of hex words (default output becomes ./a.bin)  
 `-g` to output debug info  
 `-kernel` to allow the use of privileged instructions (normally disallowed) and output a kernel-mode hex file instead of an ELF hex file  
 `-crt` to prepend `crt/crt0.s` and `crt/arithmetic.s` to the input list so `_start` is emitted first  
+
+Notes on `-bin`:
+- Output is little-endian bytes instead of text hex.
+- `-bin` is not compatible with `-g` (debug labels are emitted as text).
+- For kernel builds, `.origin` gaps are zero-filled so the binary is a flat memory image starting at address 0.
 
 ## Syntax Highlighting
 

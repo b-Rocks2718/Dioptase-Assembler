@@ -1230,6 +1230,18 @@ int encode_branch_immediate(long imm, bool* success){
   }
 }
 
+int encode_adpc_immediate(long imm, bool* success){
+  if (-(1L << 21) <= imm && imm < (1L << 21)){
+    return (int)imm & 0x3FFFFF;
+  } else {
+    *success = false;
+    print_error();
+    fprintf(stderr, "adpc immediate must fit in signed 22 bits (-2097152 to 2097151)\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    return 0;
+  }
+}
+
 int consume_branch(int branch_code, bool is_absolute, bool* success){
   int instruction = 0;
 
@@ -1271,6 +1283,33 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
     instruction |= rb;
   }
 
+  return instruction;
+}
+
+int consume_adpc(bool* success){
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  enum ConsumeResult result;
+  long imm = consume_immediate(&result);
+  if (result != FOUND){
+    print_error();
+    if (result == NOT_FOUND) fprintf(stderr, "adpc expects immediate or label\n");
+    *success = false;
+    return 0;
+  }
+
+  int encoding = encode_adpc_immediate(imm, success);
+  int instruction = 0;
+  instruction |= 22 << 27;
+  instruction |= ra << 22;
+  instruction |= encoding;
   return instruction;
 }
 
@@ -1865,6 +1904,9 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("bba")) instruction = consume_branch(17, true, &success);
   else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
   else if (consume_keyword("jmp")) instruction = consume_jmp(&success);
+
+  // pc-relative to absolute address
+  else if (consume_keyword("adpc")) instruction = consume_adpc(&success);
   
   // system calls
   else if (consume_keyword("sys")) instruction = consume_syscall(&success);

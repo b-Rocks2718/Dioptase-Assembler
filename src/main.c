@@ -112,12 +112,14 @@ int main(int argc, const char *const *const argv){
 
   const char* target_name = "./a.hex";
   char* target_name_alloc = NULL;
+  bool target_name_default = true;
 
   // look for flags
   bool pre_only = false;
   bool is_kernel = false;
   bool debug_labels = false;
   bool include_crt = false;
+  bool output_binary = false;
   const char** cli_defines = malloc(argc * sizeof(char*));
   int num_defines = 0;
   for (int i = 1; i < argc; ++i){
@@ -131,7 +133,10 @@ int main(int argc, const char *const *const argv){
         exit(1);
       }
       target_name = argv[i + 1];
+      target_name_default = false;
       ++i;
+    } else if (strcmp(argv[i], "-bin") == 0){
+      output_binary = true;
     } else if (strcmp(argv[i], "-kernel") == 0){
       is_kernel = true;
     } else if (strcmp(argv[i], "-g") == 0){
@@ -148,7 +153,7 @@ int main(int argc, const char *const *const argv){
       }
       cli_defines[num_defines++] = def;
     } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -kernel, -g, -crt, or -DNAME=value\n", argv[i]);
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -bin, -kernel, -g, -crt, or -DNAME=value\n", argv[i]);
       free(file_names);
       free(cli_defines);
       exit(1);
@@ -162,6 +167,17 @@ int main(int argc, const char *const *const argv){
   if (num_files <= 0) {
     fprintf(stderr,"Must pass at least one source file\n");
     exit(1);
+  }
+
+  if (output_binary && debug_labels){
+    fprintf(stderr, "Assembler Error: -bin output does not support -g debug labels\n");
+    free(file_names);
+    free(cli_defines);
+    exit(1);
+  }
+
+  if (output_binary && target_name_default){
+    target_name = "./a.bin";
   }
 
   const char* const* input_args = argv;
@@ -309,45 +325,64 @@ int main(int argc, const char *const *const argv){
   }
 
   // write output
-  FILE* fptr = fopen(target_name, "w");
+  const char* output_mode = output_binary ? "wb" : "w";
+  FILE* fptr = fopen(target_name, output_mode);
 
   if(fptr == NULL){
     fprintf(stderr, "Could not open output file\n");   
     exit(1);             
   }
 
-  if (is_kernel) {
-    // write raw instructions without ELF structure
-    fprint_instruction_array_list(fptr, program->sections, true);
+  if (output_binary) {
+    if (is_kernel) {
+      // write raw kernel image with origin padding
+      fwrite_instruction_array_list(fptr, program->sections, true);
+    } else {
+      // write elf header
+      struct ElfHeader header = create_elf_header(program);
+      fwrite_elf_header(fptr, &header);
+
+      // write program header table
+      struct ElfProgramHeader* pht = create_PHT(program);
+      fwrite_pht(fptr, pht);
+      free(pht);
+
+      // write program data
+      fwrite_instruction_array_list(fptr, program->sections, false);
+    }
 
     destroy_program_descriptor(program);
   } else {
-    // write elf header
-    struct ElfHeader header = create_elf_header(program);
-    fprint_elf_header(fptr, &header);
+    if (is_kernel) {
+      // write raw instructions without ELF structure
+      fprint_instruction_array_list(fptr, program->sections, true);
+    } else {
+      // write elf header
+      struct ElfHeader header = create_elf_header(program);
+      fprint_elf_header(fptr, &header);
 
-    // write program header table
-    struct ElfProgramHeader* pht = create_PHT(program);
-    fprint_pht(fptr, pht);
-    free(pht);
+      // write program header table
+      struct ElfProgramHeader* pht = create_PHT(program);
+      fprint_pht(fptr, pht);
+      free(pht);
 
-    // write program data
-    fprint_instruction_array_list(fptr, program->sections, false);
+      // write program data
+      fprint_instruction_array_list(fptr, program->sections, false);
+    }
 
     destroy_program_descriptor(program);
-  }
 
-  
-  // Append label metadata for the debugger.
-  if (debug_labels){
-    if (is_kernel) {
-      fprint_label_list_kernel(fptr, labels);
-    } else {
-      fprint_label_list(fptr, labels);
+    // Append label metadata for the debugger.
+    if (debug_labels){
+      if (is_kernel) {
+        fprint_label_list_kernel(fptr, labels);
+      } else {
+        fprint_label_list(fptr, labels);
+      }
+      destroy_label_list(labels);
+      fprint_debug_info_list(fptr, labels_c);
+      destroy_debug_info_list(labels_c);
     }
-    destroy_label_list(labels);
-    fprint_debug_info_list(fptr, labels_c);
-    destroy_debug_info_list(labels_c);
   }
 
   fclose(fptr);
