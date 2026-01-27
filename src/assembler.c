@@ -12,7 +12,6 @@
 #include "instruction_array.h"
 #include "label_list.h"
 #include "preprocessor.h"
-#include "interrupts.h"
 #include "elf.h"
 #include "debug.h"
 
@@ -508,16 +507,6 @@ bool skip_label(struct InstructionArrayList* instructions){
   char const * old_current = current;
   struct Slice* label = consume_identifier();
   if (label != NULL && consume(":")) {
-    if (is_kernel){
-      // Update IVT entries when a label exactly matches an interrupt name.
-      for (int i = 0; i < NUM_INTERRUPTS; ++i){
-        if ((strncmp(label->start, interrupts[i].name, label->len) == 0)
-            && (label->len == strlen(interrupts[i].name))){
-          // 0x400 is the kernel code start after the IVT.
-          instructions->head->instructions[interrupts[i].addr] = 1024 + hash_map_get(local_labels[current_file_index], label);
-        }
-      }
-    }
     free(label);
     return true;
   }
@@ -525,7 +514,7 @@ bool skip_label(struct InstructionArrayList* instructions){
   // undo side effects
   if (label != NULL) free(label);
   current = old_current;
-  return NULL;
+  return false;
 }
 
 // attempt to consume a register
@@ -779,12 +768,10 @@ static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
   if (label_has_definition(local_labels[current_file_index], name)) {
     imm = hash_map_get(local_labels[current_file_index], name);
     // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
-    if (is_kernel) imm += 0x400;
     *result = FOUND;
   } else if (label_has_definition(global_labels, name)) {
     imm = hash_map_get(global_labels, name);
     // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
-    if (is_kernel) imm += 0x400;
     *result = FOUND;
   } else {
     print_error();
@@ -841,8 +828,7 @@ long consume_label_imm(enum ConsumeResult* result){
   } else {
     *result = NOT_FOUND;
   }
-  // Kernel code is relocated to 0x400 (after the IVT), so adjust label immediates.
-  return is_kernel ? imm + 0x400 : imm;
+  return imm;
 }
 
 // consume a literal immediate or label immediate
@@ -1756,10 +1742,8 @@ void record_define(bool* success){
       imm = hash_map_get(local_defines[current_file_index], value_label);
     } else if (label_has_definition(local_labels[current_file_index], value_label)){
       imm = hash_map_get(local_labels[current_file_index], value_label);
-      if (is_kernel) imm += 0x400;
     } else if (label_has_definition(global_labels, value_label)){
       imm = hash_map_get(global_labels, value_label);
-      if (is_kernel) imm += 0x400;
     } else {
       print_error();
       fprintf(stderr, "Label \"");
@@ -2027,7 +2011,7 @@ bool process_labels(char const* const prog){
           fprintf(stderr, ".origin address must be a 32 bit integer\n");
           return false;
         }
-        pc = imm - 0x400; // account for kernel offset
+        pc = imm;
         continue;
       }
       else if (consume_keyword(".text")) {
@@ -2750,18 +2734,10 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     return NULL;
   }
   entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
-  if (is_kernel) entry_point += 0x400;
 
   pass_number = 2;
 
   struct InstructionArrayList* instructions = create_instruction_array_list();
-
-  if (is_kernel){
-    // fill in IVT
-    for (int i = 0; i < 256; ++i){
-      instruction_array_append(instructions->tail, 0);
-    }
-  }
 
   if (!is_kernel){
     text_instruction_array = instructions->head;
@@ -2775,7 +2751,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   reset_section_offsets();
   current_section = -1;
   bss_size = 0;
-  pc = is_kernel ? 0x400 : section_bases[TEXT_SECTION];
+  pc = is_kernel ? 0 : section_bases[TEXT_SECTION];
   for (int i = 0; i < num_files; ++i){
     current_file_index = i;
     current_file = argv[file_names[i]];
@@ -2794,7 +2770,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
 
   if (labels_out != NULL){
     struct LabelList* labels = create_label_list(128);
-    uint32_t offset = is_kernel ? 0x400 : 0;
+    uint32_t offset = 0;
     for (int j = 0; j < num_files; ++j) {
       append_labels_from_map(local_labels[j], labels, offset);
     }
