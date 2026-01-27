@@ -14,7 +14,7 @@ Remove all generated files but the final executable with `make clean`
 
 Remove everything with `make purge`
 
-Assembler expects a global `_start` label to be defined in one of the source files. For user mode files, `_start` is the entry point. For kernel mode files, `_start` is where the kernel begins execution on boot.
+For user programs, the assembler expects a global `_start` label to be defined in one of the source files. This is the entry point. 
 
 #### Supported Flags 
 `-pre` if you wish to print the output of the preprocessor (can be useful for debugging)  

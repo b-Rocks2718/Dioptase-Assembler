@@ -357,12 +357,6 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     result[result_index] = '\0';
     result_index++; 
 
-    // add a jump to _start
-    if (i == 0 && is_kernel){
-      result_index += sprintf(result + result_index, 
-        "  movu r29, _start; movl r29, _start; br r29, r29\n");
-    }
-
     while (*current != '\0'){
       // expand dynamic array if necessary, exit if realloc fails 
       if (!check_capacity()) {

@@ -1,5 +1,5 @@
-#label _start 0000000C
-#label k_loop 00000010
-#label k_mid 00000018
+#label _start 00000000
+#label k_loop 00000004
+#label k_mid 0000000C
 #label origin_label 00000600
 #label k_end 00000604

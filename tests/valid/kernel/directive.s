@@ -2,7 +2,7 @@
     # .global is tested separately
 
 .define NUM 10
-
+    .origin 0x400
     .global _start
 _start:
     .fill 0xAAAA5555
