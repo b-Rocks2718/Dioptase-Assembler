@@ -2761,21 +2761,21 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     compute_section_bases();
     for (int i = 0; i < num_files; ++i) adjust_label_map_for_sections(local_labels[i]);
     adjust_label_map_for_sections(global_labels);
-  }
 
-  struct Slice start_label = {"_start", 6};
-  if (!label_has_definition(global_labels, &start_label)){
-    fprintf(stderr, "Missing global label _start\n");
-    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-    for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-    free(local_labels);
-    free(local_defines);
-    free(local_globals);
-    destroy_hash_map(global_labels);
-    return NULL;
+    struct Slice start_label = {"_start", 6};
+    if (!label_has_definition(global_labels, &start_label)){
+      fprintf(stderr, "Missing global label _start\n");
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
+      free(local_labels);
+      free(local_defines);
+      free(local_globals);
+      destroy_hash_map(global_labels);
+      return NULL;
+    }
+    entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
   }
-  entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
 
   pass_number = 2;
 
