@@ -565,6 +565,7 @@ int consume_control_register(void) {
     else if (consume_named_register("imr")) return 3;
     else if (consume_named_register("epc")) return 4;
     else if (consume_named_register("flg")) return 5;
+    else if (consume_named_register("efg")) return 6;
     else if (consume_named_register("tlb")) return 7;
     else if (consume_named_register("ksp")) return 8;
     else if (consume_named_register("cid")) return 9;
