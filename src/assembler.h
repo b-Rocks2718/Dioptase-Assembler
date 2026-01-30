@@ -32,6 +32,9 @@ enum UserSection {
   RODATA_SECTION = 1,
   DATA_SECTION = 2,
   BSS_SECTION = 3,
+  IMPLICIT_SECTION = 4,
+  END_SECTION = 5,
+  SECTION_COUNT = 6,
 };
 
 // print line causing an error

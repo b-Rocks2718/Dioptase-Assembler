@@ -33,7 +33,7 @@
       "patterns": [
         {
           "name": "keyword.directive.dioptase",
-          "match": "\\.(?:text|data|rodata|bss|global|origin|fill|fild|filb|space|define|align|line|local)\\b"
+          "match": "\\.(?:text|data|rodata|bss|global|origin|fill|fild|filb|space|define|align|line|local|text_load|rodata_load|data_load|bss_load)\\b"
         }
       ]
     },

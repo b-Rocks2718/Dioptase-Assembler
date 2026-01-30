@@ -143,10 +143,24 @@ Do a -8 because we want the offset from the bl instruction, not the movi
 
 `.global label` - makes label global
 
-`.origin a` - places the code following the directive at address `a`. Will error if you give it a value less than the current pc (can use it to forward, not backward). Only available in kernel mode.
+`.origin a` - places the code following the directive at address `a` (integer literal or `.define`/`-D` constant). Will error if you give it a value less than the current pc (can use it to forward, not backward). Only available in kernel mode.
 
-`.text`, `.data`, `.rodata`, and `.bss` will automatically create sections starting at the next available address, and 
-are only available for user mode programs.
+`.text`, `.data`, `.rodata`, and `.bss` create sections starting at the next available address.
+
+For **user** programs, sections are laid out using the ELF layout rules described above.
+
+For **kernel** programs, these sections are supported as well:
+- Any content before the first explicit section directive goes into an *implicit* section.
+- The implicit section is placed first in the output image.
+- Each section is padded up to a multiple of 512 bytes, then the sections are concatenated.
+- The assembler uses a fixed order after the implicit section: `.text`, `.rodata`, `.data`, `.bss`.
+- A final **end section** is emitted after `.bss` and contains a single word `0xAAAAAAAA`; its address can be used to compute the padded `.bss` size.
+- `.origin` is only allowed in kernel mode and only before selecting an explicit section.
+- In kernel mode, `.bss` does **not** emit bytes; it only advances the section size.
+- Kernel section load bases can be specified with `.text_load addr`, `.rodata_load addr`, `.data_load addr`, and `.bss_load addr`.
+  These set the **runtime** addresses used for labels and pc-relative immediates but do **not** change the file layout.
+  They must appear before any content in the corresponding section. `.bss_load` also sets the runtime address of the end section
+  to `BSS_LOAD + padded_bss_size`. If omitted, runtime bases default to the concatenated file offsets.
 
 `.fill imm` - sign extends `imm` to 32 bits, then places the value in the binary at the location of the `.fill`; `imm` may be an integer literal, a label (absolute address), or a `.define`/`-D` constant
 
@@ -158,6 +172,6 @@ are only available for user mode programs.
 
 .align n - align the current location to the next multiple of `n` bytes (power of 2), emitting zero bytes as padding; in `.bss` this only increases the size without emitting data
 
-`.space n` - expands to `.filb 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed)
+`.space n` - expands to `.filb 0`, repeated `n` times; `n` may be an integer literal or a `.define`/`-D` constant (labels are not allowed). In `.bss` it only increases the size without emitting data.
 
 `.define NAME n` - macro for defining constants

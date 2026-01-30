@@ -29,6 +29,15 @@ Notes on `-bin`:
 - `-bin` is not compatible with `-g` (debug labels are emitted as text).
 - For kernel builds, `.origin` gaps are zero-filled so the binary is a flat memory image starting at address 0.
 
+Kernel section layout:
+- `.text`, `.rodata`, `.data`, and `.bss` are supported in kernel mode.
+- Any content before the first explicit section directive goes into an implicit section.
+- The implicit section is placed first; the other sections follow in the fixed order `.text`, `.rodata`, `.data`, `.bss`.
+- Each section is padded to a multiple of 512 bytes before concatenation.
+- A final end section is emitted after `.bss` with a single `0xAAAAAAAA` word; its address can be used to compute the padded `.bss` size.
+- `.bss` does not emit bytes in kernel mode; it only advances the size.
+- `.origin` is only allowed in kernel mode and only before selecting an explicit section.
+
 ## Syntax Highlighting
 
 cd into the `dioptase-assembly` directory and run
