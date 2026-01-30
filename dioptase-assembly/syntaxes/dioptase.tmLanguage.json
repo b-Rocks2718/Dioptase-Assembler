@@ -58,7 +58,7 @@
       "patterns": [
         {
           "name": "variable.register.dioptase",
-          "match": "\\b(?:r(?:[0-9]|[12][0-9]|3[01])|sp|bp|ra|cr(?:[0-9]|1[0-2])|psr|pid|isr|imr|epc|flg|tlb|ksp|cid|mbi|mbo|efg|isp)\\b"
+          "match": "\\b(?:r(?:[0-9]|[12][0-9]|3[01])|sp|bp|ra|cr(?:[0-9]|1[0-3])|psr|pid|isr|imr|epc|flg|tlb|ksp|cid|mbi|mbo|efg|isp)\\b"
         }
       ]
     },

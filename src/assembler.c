@@ -649,7 +649,7 @@ int consume_control_register(void) {
       i += 1;
     }
 
-    if (v > 12 || is_identifier_char(current[i])) return -1;
+    if (v > 13 || is_identifier_char(current[i])) return -1;
     current += i;
     return v;
   } else {
