@@ -571,6 +571,7 @@ int consume_control_register(void) {
     else if (consume_named_register("cid")) return 9;
     else if (consume_named_register("mbi")) return 10;
     else if (consume_named_register("mbo")) return 11;
+    else if (consume_named_register("isp")) return 12;
     else return -1;
   }
 }
