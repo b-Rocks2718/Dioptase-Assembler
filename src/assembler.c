@@ -649,7 +649,7 @@ int consume_control_register(void) {
       i += 1;
     }
 
-    if (v > 13 || is_identifier_char(current[i])) return -1;
+    if (v > 12 || is_identifier_char(current[i])) return -1;
     current += i;
     return v;
   } else {
@@ -665,7 +665,7 @@ int consume_control_register(void) {
     else if (consume_named_register("cid")) return 9;
     else if (consume_named_register("mbi")) return 10;
     else if (consume_named_register("mbo")) return 11;
-    else if (consume_named_register("isp")) return 12;
+    else if (consume_named_register("isa")) return 12;
     else return -1;
   }
 }
@@ -1736,16 +1736,6 @@ int consume_rfe(int r_type, bool* success){
   return instruction;
 }
 
-int consume_rft(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27;
-  instruction |= 5 << 12;
-
-  return instruction;
-}
-
 int consume_ipi(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1784,6 +1774,62 @@ int consume_ipi(bool* success){
 
     instruction |= imm;
   }
+
+  return instruction;
+}
+
+int consume_isa(int op, bool* success){ 
+  check_privileges(success);
+  if (!*success) return 0;
+
+  assert(0 <= op && op < 2); // ensure op is valid
+
+  // consume reg
+  int ra = consume_register();
+  if (ra == -1){
+    print_error();
+    fprintf(stderr, "Invalid register\n");
+    fprintf(stderr, "Valid registers are r0 - r31\n");
+    *success = false;
+    return 0;
+  }
+
+  // consume offset
+  if (!consume("[")){
+    *success = false;
+    print_error();
+    fprintf(stderr, "Expected \"[\" in isa instruction\n");
+    return 0;
+  }
+  enum ConsumeResult result;
+  long imm = consume_literal(&result);
+  if (result != FOUND){
+    print_error();
+    if (result == NOT_FOUND) fprintf(stderr, "isa instruction expects integer literal\n");
+    *success = false;
+    return 0;
+  }
+  if (!consume("]")){
+    *success = false;
+    print_error();
+    fprintf(stderr, "Expected \"]\" in isa instruction\n");
+    return 0;
+  }
+
+  // ensure imm fits in 11 bits
+  if (imm < 0 || imm >= 2048){
+    print_error();
+    fprintf(stderr, "isa instruction immediate must be in range [0, 2047]\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+
+  int instruction = 31 << 27; // opcode
+  instruction |= 5 << 12; // ID
+  instruction |= op << 11;
+  instruction |= ra << 22;
+  instruction |= imm & 0x7FF;
 
   return instruction;
 }
@@ -2032,8 +2078,9 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
   else if (consume_keyword("rfe")) instruction = consume_rfe(0, &success);
   else if (consume_keyword("rfi")) instruction = consume_rfe(1, &success);
-  else if (consume_keyword("rft")) instruction = consume_rft(&success);
   else if (consume_keyword("ipi")) instruction = consume_ipi(&success);
+  else if (consume_keyword("sisa")) instruction = consume_isa(0, &success);
+  else if (consume_keyword("lisa")) instruction = consume_isa(1, &success);
 
   // hacks to make movi and call work
   else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
