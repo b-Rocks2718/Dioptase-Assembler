@@ -24,5 +24,3 @@ INT_TIMER:
     tlbi r3
     ipi  r3, 2
     ipi  r3, all
-    sisa r4, [0]
-    lisa r4, [1]

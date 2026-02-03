@@ -41,7 +41,7 @@
       "patterns": [
         {
           "name": "keyword.instruction.dioptase",
-          "match": "\\b(?:lisa|sisa|adpc|rfi|and|nand|or|nor|xor|xnor|not|lsl|lsr|asr|rotl|rotr|lslc|lsrc|add|addc|sub|cmp|subb|sw|lw|swa|lwa|sd|sda|ld|lda|sb|sba|lb|lba|br|bz|bnz|bs|bns|bc|bnc|bo|bno|bps|bnps|bg|bge|bl|ble|ba|bae|bb|bbe|jmp|bra|bza|bnza|bsa|bnsa|bca|bnca|boa|bnoa|bpa|bnpa|bga|bgea|bla|blea|baa|baea|bba|bbea|lui|sys|crmv|tlbr|tlbw|tlbi|tlbc|mode|rfe|nop|mov|ret|jmp|fada|fad|swpa|swp|ipi|sxtb|sxtd|tncb|tncd)\\b"
+          "match": "\\b(?:adpc|rfi|and|nand|or|nor|xor|xnor|not|lsl|lsr|asr|rotl|rotr|lslc|lsrc|add|addc|sub|cmp|subb|sw|lw|swa|lwa|sd|sda|ld|lda|sb|sba|lb|lba|br|bz|bnz|bs|bns|bc|bnc|bo|bno|bps|bnps|bg|bge|bl|ble|ba|bae|bb|bbe|jmp|bra|bza|bnza|bsa|bnsa|bca|bnca|boa|bnoa|bpa|bnpa|bga|bgea|bla|blea|baa|baea|bba|bbea|lui|sys|crmv|tlbr|tlbw|tlbi|tlbc|mode|rfe|nop|mov|ret|jmp|fada|fad|swpa|swp|ipi|sxtb|sxtd|tncb|tncd)\\b"
         }
       ]
     },
@@ -58,7 +58,7 @@
       "patterns": [
         {
           "name": "variable.register.dioptase",
-          "match": "\\b(?:r(?:[0-9]|[12][0-9]|3[01])|sp|bp|ra|cr(?:[0-9]|1[0-2])|psr|pid|isr|imr|epc|flg|tlb|ksp|cid|mbi|mbo|efg|isa)\\b"
+          "match": "\\b(?:r(?:[0-9]|[12][0-9]|3[01])|sp|bp|ra|cr(?:[0-9]|1[01])|psr|pid|isr|imr|epc|flg|tlb|ksp|cid|mbi|mbo|efg)\\b"
         }
       ]
     },
