@@ -33,9 +33,12 @@ Valid control registers:
 `imr` (interrupt mask register) is an alias for `cr3`  
 `epc` (exceptional PC) is an alias for `cr4`  
 `flg` (flags) is an alias for `cr5`  
-`cdv` (clock divider) is an alias for `cr6`  
+`efg` (exceptional flags) is an alias for `cr6`  
 `tlb` (translation lookaside buffer) is an alias for `cr7`
-`ksp` (kernel stack pointer) is an alias for `cr8`
+`ksp` (kernel stack pointer) is an alias for `cr8`  
+`cid` (core ID) is an alias for `cr9`  
+`mbi` (mailbox in) is an alias for `cr10`  
+`mbo` (mailbox out) is an alias for `cr11`  
 
 You can pass any nonzero number of .s files into the assembler and it will produce a single `.hex` file.
 Whenever the assembler is called, exactly one of the files passed in must contain a `_start` label.
