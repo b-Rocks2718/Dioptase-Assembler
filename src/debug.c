@@ -1,6 +1,24 @@
 #include "debug.h"
 
 #include <stdlib.h>
+#include <string.h>
+
+// Debug metadata is written after the preprocessed source buffers are freed, so
+// it cannot retain borrowed Slice views into those transient buffers.
+static struct Slice* duplicate_slice(const struct Slice* slice){
+  struct Slice* copy = malloc(sizeof(struct Slice));
+  char* text = malloc(slice->len);
+  memcpy(text, slice->start, slice->len);
+  copy->start = text;
+  copy->len = slice->len;
+  return copy;
+}
+
+static void destroy_owned_slice(struct Slice* slice){
+  if (slice == NULL) return;
+  free((void*)slice->start);
+  free(slice);
+}
 
 struct DebugInfoList* create_debug_info_list(void){
   struct DebugInfoList* list = malloc(sizeof(struct DebugInfoList));
@@ -12,7 +30,7 @@ struct DebugInfoList* create_debug_info_list(void){
 void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr){
   // create new DebugLocal
   struct DebugLocal* local = malloc(sizeof(struct DebugLocal));
-  local->name = name;
+  local->name = duplicate_slice(name);
   local->offset = offset;
   local->size = size;
   local->addr = addr;
@@ -34,7 +52,7 @@ void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int o
 void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr){
   // create new DebugLine
   struct DebugLine* line = malloc(sizeof(struct DebugLine));
-  line->file_name = file_name;
+  line->file_name = duplicate_slice(file_name);
   line->line_number = line_number;
   line->addr = addr;
   // create new DebugEntry
@@ -75,9 +93,11 @@ void destroy_debug_info_list(struct DebugInfoList* debug_list){
     // free the contained info based on type
     if (current->type == DEBUG_INFO_LOCALS){
       struct DebugLocal* local = current->info.locals;
+      destroy_owned_slice(local->name);
       free(local);
     } else if (current->type == DEBUG_INFO_LINES){
       struct DebugLine* line = current->info.lines;
+      destroy_owned_slice(line->file_name);
       free(line);
     }
     free(current);

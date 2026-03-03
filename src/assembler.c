@@ -564,12 +564,12 @@ struct Slice* consume_identifier(void) {
 struct Slice* consume_filename(void) {
   skip();
   size_t i = 0;
-  // filenames begin with a letter or underscore
-  if (isalpha(current[i]) || current[i] == '_') {
+  // Debug file names may be relative or absolute and are emitted without
+  // quotes. Consume until the next whitespace or statement separator.
+  if (current[i] != '\0' && !isspace(current[i]) && current[i] != ',' && current[i] != ';') {
     do {
       i += 1;
-      // then followed by letters, number, underscores, and periods, and slashes
-    } while(isalnum(current[i]) || current[i] == '_' || current[i] == '.' || current[i] == '/');
+    } while(current[i] != '\0' && !isspace(current[i]) && current[i] != ',' && current[i] != ';');
 
     struct Slice* slice = malloc(sizeof(struct Slice));
     slice->start = current;
@@ -2558,6 +2558,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
       add_debug_line(debug_info_list, filename, line_num, (uint32_t)pc);
+      free(filename);
     }
     else if (consume_keyword(".local")) {
       // Parse name and bp offset; record the address where locals become visible.
@@ -2589,6 +2590,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
       add_debug_local(debug_info_list, varname, bp_offset, (size_t)size_value, (uint32_t)pc);
+      free(varname);
     }
     else if (consume_keyword(".align")) {
       enum ConsumeResult result;
