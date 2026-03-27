@@ -1700,6 +1700,39 @@ int consume_crmv(bool* success){
   return instruction;
 }
 
+int consume_eoi(bool* success){
+  check_privileges(success);
+  if (!*success) return 0;
+
+  int instruction = 31 << 27; // opcode
+  instruction |= 5 << 12; // privileged ID for eoi
+
+  skip();
+  if (consume_keyword("all")) {
+    instruction |= 1 << 11;
+    return instruction;
+  }
+
+  enum ConsumeResult result;
+  long imm = consume_immediate(&result);
+  if (result != FOUND) {
+    print_error();
+    fprintf(stderr, "eoi instruction expects 'all' or an ISR bit index in range 0 to 15\n");
+    *success = false;
+    return 0;
+  }
+  if (imm < 0 || imm > 15) {
+    print_error();
+    fprintf(stderr, "eoi bit index must be in range 0 to 15\n");
+    fprintf(stderr, "Got %ld\n", imm);
+    *success = false;
+    return 0;
+  }
+
+  instruction |= imm & 0xF;
+  return instruction;
+}
+
 int consume_mode_op(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -2023,6 +2056,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("rfe")) instruction = consume_rfe(0, &success);
   else if (consume_keyword("rfi")) instruction = consume_rfe(1, &success);
   else if (consume_keyword("ipi")) instruction = consume_ipi(&success);
+  else if (consume_keyword("eoi")) instruction = consume_eoi(&success);
   // hacks to make movi and call work
   else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
   else if (consume_keyword("movl")) instruction = consume_mov_hack(1, &success);
