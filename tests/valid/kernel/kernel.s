@@ -20,7 +20,7 @@ EXIT:
 INT_TIMER:
     mode sleep
     crmv r3, r31
-    rfi
+    rfe
     tlbi r3
     ipi  r3, 2
     ipi  r3, all

@@ -1756,13 +1756,11 @@ int consume_mode_op(bool* success){
   return instruction;
 }
 
-int consume_rfe(int r_type, bool* success){
-  assert(0 <= r_type && r_type <= 1);
+int consume_rfe(bool* success){
   check_privileges(success);
   if (!*success) return 0;
 
   int instruction = 31 << 27;
-  instruction |= r_type << 11;
   instruction |= 3 << 12;
 
   return instruction;
@@ -2053,8 +2051,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("tlbc")) instruction = consume_tlb_op(3, &success);
   else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
   else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
-  else if (consume_keyword("rfe")) instruction = consume_rfe(0, &success);
-  else if (consume_keyword("rfi")) instruction = consume_rfe(1, &success);
+  else if (consume_keyword("rfe")) instruction = consume_rfe(&success);
   else if (consume_keyword("ipi")) instruction = consume_ipi(&success);
   else if (consume_keyword("eoi")) instruction = consume_eoi(&success);
   // hacks to make movi and call work
