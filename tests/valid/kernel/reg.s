@@ -14,8 +14,9 @@ _start:
   mov r0, epc
   mov r0, flg
   mov r0, cr6
-  mov r0, tlb
+  mov r0, tlba
   mov r0, ksp
   mov r0, cid
   mov r0, mbi
   mov r0, mbo
+  mov r0, tlbf

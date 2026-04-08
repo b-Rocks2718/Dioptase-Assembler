@@ -26,7 +26,7 @@ Valid registers: `r0` - `r31`
 
 Valid control registers:
 
-`cr0` - `cr8`  
+`cr0` - `cr12`  
 `psr` (processor status register) is an alias for `cr0`  
 `pid` (process ID) is an alias for `cr1`  
 `isr` (interrupt status register) is an alias for `cr2`  
@@ -34,11 +34,12 @@ Valid control registers:
 `epc` (exceptional PC) is an alias for `cr4`  
 `flg` (flags) is an alias for `cr5`  
 `efg` (exceptional flags) is an alias for `cr6`  
-`tlb` (translation lookaside buffer) is an alias for `cr7`
+`tlba` (tlb fault address) is an alias for `cr7`
 `ksp` (kernel stack pointer) is an alias for `cr8`  
 `cid` (core ID) is an alias for `cr9`  
 `mbi` (mailbox in) is an alias for `cr10`  
 `mbo` (mailbox out) is an alias for `cr11`  
+`tlbf` (TLB fault flags) is an alias for `cr12`  
 
 You can pass any nonzero number of .s files into the assembler and it will produce a single `.hex` file.
 Whenever the assembler is called, exactly one of the files passed in must contain a `_start` label.

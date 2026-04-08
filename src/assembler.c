@@ -649,7 +649,7 @@ int consume_control_register(void) {
       i += 1;
     }
 
-    if (v > 11 || is_identifier_char(current[i])) return -1;
+    if (v > 12 || is_identifier_char(current[i])) return -1;
     current += i;
     return v;
   } else {
@@ -660,11 +660,12 @@ int consume_control_register(void) {
     else if (consume_named_register("epc")) return 4;
     else if (consume_named_register("flg")) return 5;
     else if (consume_named_register("efg")) return 6;
-    else if (consume_named_register("tlb")) return 7;
+    else if (consume_named_register("tlba")) return 7;
     else if (consume_named_register("ksp")) return 8;
     else if (consume_named_register("cid")) return 9;
     else if (consume_named_register("mbi")) return 10;
     else if (consume_named_register("mbo")) return 11;
+    else if (consume_named_register("tlbf")) return 12;
     else return -1;
   }
 }
