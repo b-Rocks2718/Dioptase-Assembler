@@ -93,7 +93,7 @@ The first operand, which specifies where the pc will be stored, can be optionall
 
 ### Syscalls
 
-`sys CODE` where `CODE` is a valid syscall. For now, the only one is `EXIT`
+`sys CODE` where `CODE` is a valid syscall. For now, the only one is `EXIT`, which encodes syscall immediate `0x01`.
 
 ## Macros
 
