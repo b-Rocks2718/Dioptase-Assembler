@@ -13,21 +13,6 @@
 #include "elf.h"
 #include "debug.h"
 
-// Purpose: Environment variable pointing to the CRT source directory.
-// Inputs/Outputs: Read via getenv when -crt is requested.
-// Invariants/Assumptions: Directory contains crt0.s and arithmetic.s.
-static const char* kCrtDirEnvVar = "DIOPTASE_CRT_DIR";
-
-// Purpose: Environment variable pointing to the repo root for CRT lookup.
-// Inputs/Outputs: Read via getenv when DIOPTASE_CRT_DIR is unset.
-// Invariants/Assumptions: Repo root contains Dioptase-OS/crt.
-static const char* kRepoRootEnvVar = "DIOPTASE_ROOT";
-
-// Purpose: Relative CRT directory under the repo root.
-// Inputs/Outputs: Joined with DIOPTASE_ROOT when DIOPTASE_CRT_DIR is unset.
-// Invariants/Assumptions: Uses '/' as the host path separator.
-static const char* kDefaultCrtRelDir = "Dioptase-OS/crt";
-
 // Purpose: CRT files to prepend when -crt is used.
 // Inputs/Outputs: Joined with the CRT directory to form full paths.
 // Invariants/Assumptions: Order matters so _start is emitted first.
@@ -36,19 +21,6 @@ static const char* const kCrtFileNames[kCrtFileCount] = {
   "crt0.s",
   "arithmetic.s",
 };
-
-// Purpose: Copy a string into heap storage.
-// Inputs: src is a NUL-terminated string.
-// Outputs: Returns a heap-allocated copy or NULL on allocation failure.
-// Invariants/Assumptions: Caller must free the returned string.
-static char* duplicate_string(const char* src) {
-  if (src == NULL) return NULL;
-  size_t len = strlen(src);
-  char* copy = malloc(len + 1);
-  if (copy == NULL) return NULL;
-  memcpy(copy, src, len + 1);
-  return copy;
-}
 
 // Purpose: Join two path components with a '/' separator when needed.
 // Inputs: left and right are path components.
@@ -68,24 +40,6 @@ static char* join_paths(const char* left, const char* right) {
     snprintf(path, total_len, "%s%s", left, right);
   }
   return path;
-}
-
-// Purpose: Resolve the CRT directory using environment variables.
-// Inputs: None.
-// Outputs: Returns a heap-allocated directory path or NULL if unset/unavailable.
-// Invariants/Assumptions: Prefers DIOPTASE_CRT_DIR, falls back to DIOPTASE_ROOT.
-static char* resolve_crt_dir(void) {
-  const char* dir = getenv(kCrtDirEnvVar);
-  if (dir != NULL && dir[0] != '\0') {
-    return duplicate_string(dir);
-  }
-
-  const char* root = getenv(kRepoRootEnvVar);
-  if (root == NULL || root[0] == '\0') {
-    return NULL;
-  }
-
-  return join_paths(root, kDefaultCrtRelDir);
 }
 
 // Purpose: Free an array of CRT path strings.
@@ -118,8 +72,8 @@ int main(int argc, const char *const *const argv){
   bool pre_only = false;
   bool is_kernel = false;
   bool debug_labels = false;
-  bool include_crt = false;
   bool output_binary = false;
+  const char* crt_dir = NULL;
   const char** cli_defines = malloc(argc * sizeof(char*));
   int num_defines = 0;
   for (int i = 1; i < argc; ++i){
@@ -142,7 +96,13 @@ int main(int argc, const char *const *const argv){
     } else if (strcmp(argv[i], "-g") == 0){
       debug_labels = true;
     } else if (strcmp(argv[i], "-crt") == 0){
-      include_crt = true;
+      if (i + 1 == argc){
+        fprintf(stderr, "Must specify a CRT directory after -crt\n");
+        free(file_names);
+        free(cli_defines);
+        exit(1);
+      }
+      crt_dir = argv[++i];
     } else if (strncmp(argv[i], "-D", 2) == 0){
       const char* def = argv[i] + 2;
       if (def[0] == '\0' || strchr(def, '=') == NULL){
@@ -153,7 +113,7 @@ int main(int argc, const char *const *const argv){
       }
       cli_defines[num_defines++] = def;
     } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -bin, -kernel, -g, -crt, or -DNAME=value\n", argv[i]);
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -bin, -kernel, -g, -crt <dir>, or -DNAME=value\n", argv[i]);
       free(file_names);
       free(cli_defines);
       exit(1);
@@ -184,26 +144,11 @@ int main(int argc, const char *const *const argv){
   const char** input_args_alloc = NULL;
   char** crt_paths = NULL;
 
-  if (include_crt) {
-    char* crt_dir = resolve_crt_dir();
-    if (crt_dir == NULL) {
-      fprintf(stderr,
-              "Assembler Error: -crt requires %s or %s to be set. "
-              "%s should point to Dioptase-OS/crt; %s should point to the repo root.\n",
-              kCrtDirEnvVar,
-              kRepoRootEnvVar,
-              kCrtDirEnvVar,
-              kRepoRootEnvVar);
-      free(file_names);
-      free(cli_defines);
-      exit(1);
-    }
-
+  if (crt_dir != NULL) {
     // Prepend CRT sources so _start is emitted first in the output image.
     crt_paths = malloc(kCrtFileCount * sizeof(char*));
     if (crt_paths == NULL) {
       fprintf(stderr, "Assembler Error: failed to allocate CRT path list\n");
-      free(crt_dir);
       free(file_names);
       free(cli_defines);
       exit(1);
@@ -214,14 +159,12 @@ int main(int argc, const char *const *const argv){
       if (crt_paths[i] == NULL) {
         fprintf(stderr, "Assembler Error: failed to allocate CRT path for %s\n",
                 kCrtFileNames[i]);
-        free(crt_dir);
         free(file_names);
         free(cli_defines);
         free_crt_paths(crt_paths, kCrtFileCount);
         exit(1);
       }
     }
-    free(crt_dir);
 
     input_args_alloc = malloc((argc + kCrtFileCount) * sizeof(char*));
     for (int i = 0; i < argc; ++i) input_args_alloc[i] = argv[i];

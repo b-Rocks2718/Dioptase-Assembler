@@ -22,12 +22,13 @@ For user programs, the assembler expects a global `_start` label to be defined i
 `-bin` to write a raw binary image instead of hex words (default output becomes ./a.bin)  
 `-g` to output debug info  
 `-kernel` to allow the use of privileged instructions (normally disallowed) and output a kernel-mode hex file instead of an ELF hex file  
-`-crt` to prepend `crt/crt0.s` and `crt/arithmetic.s` to the input list so `_start` is emitted first  
+`-crt <dir>` to prepend `<dir>/crt0.s` and `<dir>/arithmetic.s` so `_start` is emitted first  
 
 Notes on `-bin`:
 - Output is little-endian bytes instead of text hex.
 - `-bin` is not compatible with `-g` (debug labels are emitted as text).
 - For kernel builds, `.origin` gaps are zero-filled so the binary is a flat memory image starting at address 0.
+- `-crt <dir>` is explicit; the assembler does not guess a CRT directory anymore.
 
 Kernel section layout:
 - `.text`, `.rodata`, `.data`, and `.bss` are supported in kernel mode.
