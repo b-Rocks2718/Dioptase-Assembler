@@ -135,12 +135,15 @@ addi rA, rA, (imm & 0x3FF)
 
 Can put any 32 bit value in a register
 
-`call imm` - Alias for
+`call target` - Alias for
 ```
-movi r29, <imm - 8>
-bl  r29, r29
+movu r29, target
+movl r29, target
+br   r29, r29
 ```
-Do a -8 because we want the offset from the bl instruction, not the movi
+`target` may be an integer literal or a label. For labels, `movu`/`movl` use
+the assembler's PC-relative label encoding, so the following `br` reaches the
+label and stores the return address in `r29`.
 
 `ret` - Alias for  `jmp r29`
 

@@ -512,17 +512,28 @@ bool consume(const char* str) {
   } 
 }
 
+// Classify characters that can appear inside assembler identifiers
+static bool is_identifier_body_char(char c){
+  return isalnum((unsigned char)c) || c == '_' || c == '.';
+}
+
 // attempt to consume a keyword, has no effect if a match is not found
-// differs from consume because we ensure that there is a whitespace character at the end
+// differs from consume because we ensure token boundaries on both sides
 bool consume_keyword(const char* str) {
   // skip is handled by caller so that this function is useful for preprocesser/macros
+  if (current != current_buffer_start &&
+      is_identifier_body_char(current[-1])) {
+    return false;
+  }
+
   size_t i = 0;
   while (true) {
     char const expected = str[i];
     char const found = current[i];
     if (expected == 0) {
       /* survived to the end of the expected string */
-      if (isspace(found) || found == '\0') {
+      if (isspace((unsigned char)found) || found == '\0' ||
+          found == ',' || found == ';' || found == ':') {
         // word break
         current += i;
         return true;
@@ -543,11 +554,11 @@ struct Slice* consume_identifier(void) {
   skip();
   size_t i = 0;
   // identifiers begin with a letter or underscore
-  if (isalpha(current[i]) || current[i] == '_') {
+  if (isalpha((unsigned char)current[i]) || current[i] == '_') {
     do {
       i += 1;
       // then followed by letters, number, underscores, and periods
-    } while(isalnum(current[i]) || current[i] == '_' || current[i] == '.');
+    } while(is_identifier_body_char(current[i]));
 
     struct Slice* slice = malloc(sizeof(struct Slice));
     slice->start = current;
