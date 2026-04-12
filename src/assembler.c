@@ -1437,19 +1437,9 @@ int consume_jmp(bool* success){
   return instruction;
 }
 
-int consume_syscall(bool* success){
-  if (consume("EXIT")){
-    int instruction = 15 << 27;
-    instruction |= 1;
-    return instruction;
-  } else {
-    // unrecognized call
-    print_error();
-    fprintf(stderr, "Unrecognized syscall\n");
-    fprintf(stderr, "Supported syscalls are: EXIT\n");
-    *success = false;
-    return 0;
-  }
+int consume_trap(bool* success){
+  (void)success;
+  return 15 << 27;
 }
 
 int encode_short_atomic_immediate(long imm, bool* success){
@@ -2037,7 +2027,7 @@ int consume_instruction(enum ConsumeResult* result){
   else if (consume_keyword("adpc")) instruction = consume_adpc(&success);
   
   // system calls
-  else if (consume_keyword("sys")) instruction = consume_syscall(&success);
+  else if (consume_keyword("trap")) instruction = consume_trap(&success);
   
   // atomic instructions
   else if (consume_keyword("fada")) instruction = consume_atomic(true, true, &success);

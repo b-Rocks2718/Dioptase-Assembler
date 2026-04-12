@@ -6,4 +6,4 @@ EXIT:
   .global _start
 _start:
   movi r3, 21
-  sys EXIT
+  trap

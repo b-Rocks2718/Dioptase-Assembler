@@ -92,9 +92,18 @@ PC-relative branches, such as `bnz loop` where `loop` is a label defined somewhe
 Branch and link, such as `bl r1, r2`
 The first operand, which specifies where the pc will be stored, can be optionally omitted. If it is, `r0` will be used.  
 
-### Syscalls
+### Trap
 
-`sys CODE` where `CODE` is a valid syscall. For now, the only one is `EXIT`, which encodes syscall immediate `0x01`.
+`trap`
+
+The instruction takes no operands. Software chooses the trap operation by
+loading:
+
+- `r1` with a trap code
+- `r2-r8` trap-specific arguments
+
+Currently, trap code `0` is `exit`, and `r2` carries the 32-bit exit status
+value
 
 ## Macros
 

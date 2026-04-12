@@ -7,7 +7,7 @@ Provides syntax highlighting and language support for the [Dioptase Assembly Lan
 Open `.s` files in VS Code, the Dioptase assembly language mode should activate automatically
 
 ## Building
-Magic command: `npm_config_cache=./.npm-cache npx vsce package --no-dependencies --out dioptase-assembly-0.0.<version>.vsix`
+Magic command: `npm_config_cache=./.npm-cache npx vsce package --no-dependencies --out dioptase-assembly-0.0.9.vsix`
 
 or `vsce package`
 

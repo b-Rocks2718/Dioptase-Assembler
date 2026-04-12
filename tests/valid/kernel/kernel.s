@@ -12,7 +12,7 @@ _start:
     mode halt
 
     rfe
-    sys EXIT
+    trap
 
 EXIT:
     mode halt
