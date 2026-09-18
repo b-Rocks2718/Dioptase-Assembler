@@ -336,7 +336,11 @@ bool expand_macros(void){
 char** preprocess(int num_files, int* file_names, bool is_kernel,
   const char *const *const argv, const char * const * const files){
 
-  char ** result_list = malloc(num_files * sizeof(char**));
+  char ** result_list = malloc(num_files * sizeof(*result_list));
+  if (result_list == NULL) {
+    fprintf(stderr, "Assembler preprocessor: failed to allocate results for %d input files\n", num_files);
+    return NULL;
+  }
 
   for (int i = 0; i < num_files; ++i){
 
@@ -350,7 +354,13 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     current_file = argv[file_names[i]];
 
     result = malloc(sizeof(char) * capacity);
-    if (result == NULL) return NULL;
+    if (result == NULL) {
+      // Earlier files and the result table remain owned here until success.
+      fprintf(stderr, "Assembler preprocessor: failed to allocate output for %s\n", current_file);
+      for (int j = 0; j < i; ++j) free(result_list[j]);
+      free(result_list);
+      return NULL;
+    }
 
     // initial null used to detect start of program
     // used when printing errors

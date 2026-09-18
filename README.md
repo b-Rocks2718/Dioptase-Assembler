@@ -1,5 +1,7 @@
 # Dioptase Assembler
 
+[![CI](https://github.com/b-Rocks2718/Dioptase-Assembler/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/b-Rocks2718/Dioptase-Assembler/actions/workflows/ci.yml)
+
 Assembler for the [Dioptase Architecture](https://github.com/b-Rocks2718/Dioptase/tree/main)  
 
 See [ISA](https://github.com/b-Rocks2718/Dioptase/blob/main/docs/ISA.md) for the instruction set and [Syntax](https://github.com/b-Rocks2718/Dioptase-Assembler/blob/main/docs/synatx.md) for all of the syntax and macros supported.  

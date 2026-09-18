@@ -182,7 +182,7 @@ int main(int argc, const char *const *const argv){
     num_files += kCrtFileCount;
   }
 
-  char const** const files = malloc(num_files * sizeof(char**));
+  char const** const files = malloc(num_files * sizeof(*files));
 
   for (int i = 0; i < num_files; ++i){
     // open the files

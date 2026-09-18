@@ -4,6 +4,10 @@
 
 #include "label_list.h"
 
+#ifdef __clang_analyzer__
+#include <assert.h>
+#endif
+
 struct LabelList* create_label_list(size_t capacity){
   struct LabelList* list = malloc(sizeof(struct LabelList));
   if (capacity == 0) capacity = 16;
@@ -21,6 +25,11 @@ static bool label_entry_matches(const struct LabelEntry* entry, const char* name
 }
 
 void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr, bool is_data){
+#ifdef __clang_analyzer__
+  // Every list comes from create_label_list, which normalizes zero capacity.
+  // Model that constructor invariant when append is analyzed in isolation.
+  assert(list->capacity > 0);
+#endif
   for (size_t i = 0; i < list->size; ++i){
     if (label_entry_matches(&list->entries[i], name, len, addr, is_data)) return;
   }
