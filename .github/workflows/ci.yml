@@ -1,0 +1,26 @@
+name: PR CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assembler-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Assembler tests
+    runs-on: ubuntu-24.04
+    # The suite normally finishes in seconds; this bound catches hung tools.
+    timeout-minutes: 30
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run debug and release suites
+        run: bash .github/scripts/ci.sh
