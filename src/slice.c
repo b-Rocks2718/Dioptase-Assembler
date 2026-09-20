@@ -4,6 +4,7 @@
 
 #include "slice.h"
 
+// Compare slice to pointer.
 bool compare_slice_to_pointer(const struct Slice* s, char const *p) {
   for (size_t i = 0; i < s->len; i++) {
     if (p[i] != s->start[i])
@@ -12,6 +13,7 @@ bool compare_slice_to_pointer(const struct Slice* s, char const *p) {
   return p[s->len] == 0;
 }
 
+// Compare slice to slice.
 bool compare_slice_to_slice(const struct Slice* self, const struct Slice* other) {
   if (self->len != other->len)
     return false;
@@ -22,6 +24,7 @@ bool compare_slice_to_slice(const struct Slice* self, const struct Slice* other)
   return true;
 }
 
+// Return whether the slice contains a syntactically valid identifier.
 bool is_identifier(const struct Slice* slice) {
   if (slice->len == 0)
     return false;
@@ -33,18 +36,21 @@ bool is_identifier(const struct Slice* slice) {
   return true;
 }
 
+// Write the slice bytes to stdout without requiring NUL termination.
 void print_slice(struct Slice* slice) {
   for (size_t i = 0; i < slice->len; i++) {
     printf("%c", slice->start[i]);
   }
 }
 
+// Print slice err.
 void print_slice_err(struct Slice* slice) {
   for (size_t i = 0; i < slice->len; i++) {
     fprintf(stderr, "%c", slice->start[i]);
   }
 }
 
+// Compute the stable hash used for slice-keyed maps.
 size_t hash_slice(const struct Slice* key) {
   // djb2
   size_t out = 5381;

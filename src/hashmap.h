@@ -5,6 +5,7 @@
 
 #include "slice.h"
 
+// The one hash entry stores key, value, is_defined, is_data, and other fields.
 struct HashEntry{
   struct Slice* key;
   long value;
@@ -13,6 +14,7 @@ struct HashEntry{
   struct HashEntry* next;
 };
 
+// The hash map stores size, arr.
 struct HashMap{
 	size_t size;
   struct HashEntry** arr;

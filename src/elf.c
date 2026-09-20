@@ -3,12 +3,14 @@
 #include <string.h>
 #include <assert.h>
 
+// Write a 16-bit integer in little-endian order.
 static void write_u16_le(uint8_t* buf, size_t* offset, uint16_t value){
   buf[*offset] = (uint8_t)value;
   buf[*offset + 1] = (uint8_t)(value >> 8);
   *offset += 2;
 }
 
+// Write a 32-bit integer in little-endian order.
 static void write_u32_le(uint8_t* buf, size_t* offset, uint32_t value){
   buf[*offset] = (uint8_t)value;
   buf[*offset + 1] = (uint8_t)(value >> 8);
@@ -17,6 +19,7 @@ static void write_u32_le(uint8_t* buf, size_t* offset, uint32_t value){
   *offset += 4;
 }
 
+// Print a byte sequence as hexadecimal words for diagnostics.
 static void fprint_word_bytes(FILE* ptr, const uint8_t* bytes, size_t len){
   assert(len % 4 == 0);
   for (size_t i = 0; i < len; i += 4){
@@ -28,19 +31,19 @@ static void fprint_word_bytes(FILE* ptr, const uint8_t* bytes, size_t len){
   }
 }
 
-// Purpose: Write a byte buffer directly to a file.
-// Inputs: ptr is the output file; bytes points to the payload; len is the byte count.
-// Outputs: Writes len bytes to ptr.
-// Invariants/Assumptions: ptr is open for binary output.
+// Write a byte buffer directly to a file.
+// ptr is open for binary output.
 static void fwrite_bytes(FILE* ptr, const uint8_t* bytes, size_t len){
   fwrite(bytes, 1, len, ptr);
 }
 
+// Free an assembled program and all of its section storage.
 void destroy_program_descriptor(struct ProgramDescriptor* program){
   destroy_instruction_array_list(program->sections);
   free(program);
 }
 
+// Build the ELF header from the assembled program layout.
 struct ElfHeader create_elf_header(struct ProgramDescriptor* program){
   struct ElfHeader header;
 
@@ -85,6 +88,7 @@ struct ElfHeader create_elf_header(struct ProgramDescriptor* program){
   return header;
 }
 
+// Allocate and populate the ELF program-header table.
 struct ElfProgramHeader* create_PHT(struct ProgramDescriptor* program){
   struct ElfProgramHeader* pht = malloc(3 * sizeof(struct ElfProgramHeader));
 
@@ -118,6 +122,7 @@ struct ElfProgramHeader* create_PHT(struct ProgramDescriptor* program){
   return pht;
 }
 
+// Build the program header describing the text segment.
 struct ElfProgramHeader create_text_program_header(uint32_t offset, uint32_t vaddr, uint32_t filesz){
   struct ElfProgramHeader ph;
 
@@ -133,6 +138,7 @@ struct ElfProgramHeader create_text_program_header(uint32_t offset, uint32_t vad
   return ph;
 }
 
+// Build the program header describing the read-only-data segment.
 struct ElfProgramHeader create_rodata_program_header(uint32_t offset, uint32_t vaddr, uint32_t filesz){
   struct ElfProgramHeader ph;
 
@@ -148,6 +154,7 @@ struct ElfProgramHeader create_rodata_program_header(uint32_t offset, uint32_t v
   return ph;
 }
 
+// Build the program header describing the writable data segment.
 struct ElfProgramHeader create_data_program_header(uint32_t offset, uint32_t vaddr, uint32_t filesz, uint32_t memsz){
   struct ElfProgramHeader ph;
 
@@ -163,6 +170,7 @@ struct ElfProgramHeader create_data_program_header(uint32_t offset, uint32_t vad
   return ph;
 }
 
+// Print ELF header fields in diagnostic, human-readable form.
 void fprint_elf_header(FILE* ptr, struct ElfHeader* header){
   uint8_t bytes[52];
   size_t offset = 0;
@@ -188,6 +196,7 @@ void fprint_elf_header(FILE* ptr, struct ElfHeader* header){
   fprint_word_bytes(ptr, bytes, sizeof(bytes));
 }
 
+// Print the ELF program-header table for diagnostics.
 void fprint_pht(FILE* ptr, struct ElfProgramHeader* pht){
   for (int i = 0; i < 3; ++i){
     uint8_t bytes[32];
@@ -207,6 +216,7 @@ void fprint_pht(FILE* ptr, struct ElfProgramHeader* pht){
   }
 }
 
+// Serialize the ELF header fields to the output stream.
 void fwrite_elf_header(FILE* ptr, const struct ElfHeader* header){
   uint8_t bytes[52];
   size_t offset = 0;
@@ -232,6 +242,7 @@ void fwrite_elf_header(FILE* ptr, const struct ElfHeader* header){
   fwrite_bytes(ptr, bytes, sizeof(bytes));
 }
 
+// Write the ELF program-header table in file format order.
 void fwrite_pht(FILE* ptr, const struct ElfProgramHeader* pht){
   for (int i = 0; i < 3; ++i){
     uint8_t bytes[32];

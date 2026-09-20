@@ -13,19 +13,15 @@
 #include "elf.h"
 #include "debug.h"
 
-// Purpose: CRT files to prepend when -crt is used.
-// Inputs/Outputs: Joined with the CRT directory to form full paths.
-// Invariants/Assumptions: Order matters so _start is emitted first.
+// CRT files to prepend when -crt is used. Order matters so _start is emitted first.
 enum { kCrtFileCount = 2 };
 static const char* const kCrtFileNames[kCrtFileCount] = {
   "crt0.s",
   "arithmetic.s",
 };
 
-// Purpose: Join two path components with a '/' separator when needed.
-// Inputs: left and right are path components.
-// Outputs: Returns a heap-allocated joined path or NULL on allocation failure.
-// Invariants/Assumptions: Uses '/' as the host path separator.
+// Join two path components with a '/' separator when needed.
+// Returns a heap-allocated joined path or NULL on allocation failure.
 static char* join_paths(const char* left, const char* right) {
   if (left == NULL || right == NULL) return NULL;
   size_t left_len = strlen(left);
@@ -42,10 +38,8 @@ static char* join_paths(const char* left, const char* right) {
   return path;
 }
 
-// Purpose: Free an array of CRT path strings.
-// Inputs: paths is the array to free, count is its length.
-// Outputs: None.
-// Invariants/Assumptions: Safe to call with NULL paths.
+// Free an array of CRT path strings.
+// Safe to call with NULL paths.
 static void free_crt_paths(char** paths, int count) {
   if (paths == NULL) return;
   for (int i = 0; i < count; ++i) {
@@ -54,6 +48,7 @@ static void free_crt_paths(char** paths, int count) {
   free(paths);
 }
 
+// Assemble the requested source file and write its binary and debug outputs.
 int main(int argc, const char *const *const argv){
   if (argc <= 0) {
     fprintf(stderr,"usage: %s <file name>\n",argv[0]);
@@ -118,7 +113,6 @@ int main(int argc, const char *const *const argv){
       free(cli_defines);
       exit(1);
     } else {
-      // this is a file, record the index
       file_names[num_files] = i;
       num_files++;
     }
@@ -213,7 +207,10 @@ int main(int argc, const char *const *const argv){
       fprintf(stderr, "Failed to map source file %s: %s\n", file_path, strerror(errno));
       free(file_names);
       free(files);
-      exit(1);
+      free(cli_defines);
+      free(input_args_alloc);
+      free_crt_paths(crt_paths, kCrtFileCount);
+      return 1;
     }
     files[i] = src;
   }
@@ -272,8 +269,12 @@ int main(int argc, const char *const *const argv){
   FILE* fptr = fopen(target_name, output_mode);
 
   if(fptr == NULL){
-    fprintf(stderr, "Could not open output file\n");   
-    exit(1);             
+    fprintf(stderr, "Could not open output file\n");
+    destroy_program_descriptor(program);
+    destroy_label_list(labels);
+    destroy_debug_info_list(labels_c);
+    if (target_name_alloc != NULL) free(target_name_alloc);
+    return 1;
   }
 
   if (output_binary) {
@@ -322,12 +323,12 @@ int main(int argc, const char *const *const argv){
       } else {
         fprint_label_list(fptr, labels);
       }
-      destroy_label_list(labels);
       fprint_debug_info_list(fptr, labels_c);
-      destroy_debug_info_list(labels_c);
     }
   }
 
+  destroy_label_list(labels);
+  destroy_debug_info_list(labels_c);
   fclose(fptr);
   if (target_name_alloc != NULL) {
     free(target_name_alloc);

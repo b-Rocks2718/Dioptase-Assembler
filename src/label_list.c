@@ -8,6 +8,7 @@
 #include <assert.h>
 #endif
 
+// Allocate an empty label list whose entries own their copied names.
 struct LabelList* create_label_list(size_t capacity){
   struct LabelList* list = malloc(sizeof(struct LabelList));
   if (capacity == 0) capacity = 16;
@@ -17,6 +18,7 @@ struct LabelList* create_label_list(size_t capacity){
   return list;
 }
 
+// Compare a label entry with a source name and length.
 static bool label_entry_matches(const struct LabelEntry* entry, const char* name, size_t len, uint32_t addr, bool is_data){
   if (entry->addr != addr) return false;
   if (entry->is_data != is_data) return false;
@@ -24,6 +26,7 @@ static bool label_entry_matches(const struct LabelEntry* entry, const char* name
   return strncmp(entry->name, name, len) == 0;
 }
 
+// Append an item to label list.
 void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr, bool is_data){
 #ifdef __clang_analyzer__
   // Every list comes from create_label_list, which normalizes zero capacity.
@@ -49,6 +52,7 @@ void label_list_append(struct LabelList* list, const char* name, size_t len, uin
   list->size++;
 }
 
+// Free every owned label name and all list storage.
 void destroy_label_list(struct LabelList* list){
   if (list == NULL) return;
   for (size_t i = 0; i < list->size; ++i){
@@ -58,6 +62,7 @@ void destroy_label_list(struct LabelList* list){
   free(list);
 }
 
+// Print label list.
 void fprint_label_list(FILE* ptr, const struct LabelList* list){
   if (list == NULL) return;
   for (size_t i = 0; i < list->size; ++i){
@@ -65,10 +70,8 @@ void fprint_label_list(FILE* ptr, const struct LabelList* list){
   }
 }
 
-// Purpose: Emit label metadata for kernel outputs (no data/text distinction).
-// Inputs: ptr is the output file; list contains label entries with addresses.
-// Outputs: Writes "#label <name> <addr>" lines, ignoring is_data.
-// Invariants/Assumptions: list entries are unique by name/address.
+// Emit label metadata for kernel outputs (no data/text distinction).
+// Writes "#label <name> <addr>" lines, ignoring is_data.
 void fprint_label_list_kernel(FILE* ptr, const struct LabelList* list){
   if (list == NULL) return;
   for (size_t i = 0; i < list->size; ++i){

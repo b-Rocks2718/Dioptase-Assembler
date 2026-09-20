@@ -14,12 +14,14 @@ static struct Slice* duplicate_slice(const struct Slice* slice){
   return copy;
 }
 
+// Free a heap-backed slice and its descriptor.
 static void destroy_owned_slice(struct Slice* slice){
   if (slice == NULL) return;
   free((void*)slice->start);
   free(slice);
 }
 
+// Allocate an empty list for source lines and local-variable metadata.
 struct DebugInfoList* create_debug_info_list(void){
   struct DebugInfoList* list = malloc(sizeof(struct DebugInfoList));
   list->head = NULL;
@@ -27,6 +29,7 @@ struct DebugInfoList* create_debug_info_list(void){
   return list;
 }
 
+// Add debug local.
 void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr){
   // create new DebugLocal
   struct DebugLocal* local = malloc(sizeof(struct DebugLocal));
@@ -49,6 +52,7 @@ void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int o
   }
 }
 
+// Add debug line.
 void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr){
   // create new DebugLine
   struct DebugLine* line = malloc(sizeof(struct DebugLine));
@@ -70,6 +74,7 @@ void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, i
   }
 }
 
+// Print debug info list.
 void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list){
   struct DebugEntry* current = debug_list->head;
   while (current != NULL){
@@ -86,7 +91,9 @@ void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list){
   }
 }
 
+// Free all source-location entries and filenames in a debug-information list.
 void destroy_debug_info_list(struct DebugInfoList* debug_list){
+  if (debug_list == NULL) return;
   struct DebugEntry* current = debug_list->head;
   while (current != NULL){
     struct DebugEntry* next = current->next;

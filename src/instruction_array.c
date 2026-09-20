@@ -22,6 +22,7 @@ struct InstructionArrayList* create_instruction_array_list(void){
   return list;
 }
 
+// Append an item to instruction array list.
 void instruction_array_list_append(struct InstructionArrayList* list, struct InstructionArray* arr){
   if (list->head == NULL){
     list->head = arr;
@@ -33,23 +34,24 @@ void instruction_array_list_append(struct InstructionArrayList* list, struct Ins
   }
 }
 
+// Free all instruction-array nodes and their list wrapper.
 void destroy_instruction_array_list(struct InstructionArrayList* list){
   destroy_instruction_array(list->head);
   free(list);
 }
 
+// Print instruction array list.
 void print_instruction_array_list(struct InstructionArrayList* list){
   print_instruction_array(list->head);
 }
 
+// Print instruction array list.
 void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw){
   fprint_instruction_array(ptr, list->head, raw);
 }
 
-// Purpose: Write a 32-bit word in little-endian byte order.
-// Inputs: ptr is the output file; value is the word to write.
-// Outputs: Writes exactly 4 bytes to ptr.
-// Invariants/Assumptions: ptr is open for binary output.
+// Write a 32-bit word in little-endian byte order.
+// ptr is open for binary output.
 static void write_u32_le(FILE* ptr, uint32_t value){
   uint8_t bytes[kWordBytes];
   bytes[0] = (uint8_t)(value & kByteMask);
@@ -59,10 +61,8 @@ static void write_u32_le(FILE* ptr, uint32_t value){
   fwrite(bytes, 1, kWordBytes, ptr);
 }
 
-// Purpose: Emit zero padding bytes.
-// Inputs: ptr is the output file; count is the number of zero bytes to write.
-// Outputs: Writes count zero bytes to ptr.
-// Invariants/Assumptions: ptr is open for binary output.
+// Emit zero padding bytes.
+// ptr is open for binary output.
 static void write_zero_bytes(FILE* ptr, size_t count){
   enum { kZeroChunkBytes = 256 };
   static const uint8_t zeros[kZeroChunkBytes] = {0};
@@ -73,16 +73,15 @@ static void write_zero_bytes(FILE* ptr, size_t count){
   }
 }
 
-// Purpose: Write instruction words for a single array.
-// Inputs: ptr is the output file; arr is the instruction array to emit.
-// Outputs: Writes arr->size words as raw bytes to ptr.
-// Invariants/Assumptions: ptr is open for binary output.
+// Emit one array's words as little-endian bytes.
+// ptr is open for binary output.
 static void write_instruction_array_words(FILE* ptr, const struct InstructionArray* arr){
   for (size_t i = 0; i < arr->size; ++i){
     write_u32_le(ptr, (uint32_t)arr->instructions[i]);
   }
 }
 
+// Emit every array in list order, inserting origin padding when requested.
 void fwrite_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool include_origin_padding){
   uint32_t cursor = 0;
   for (struct InstructionArray* arr = list->head; arr != NULL; arr = arr->next){
@@ -117,6 +116,7 @@ struct InstructionArray* create_instruction_array(size_t capacity, int origin){
   return arr;
 }
 
+// Append an item to instruction array.
 void instruction_array_append(struct InstructionArray* arr, int value){
   if (arr->size == arr->capacity){
     arr->instructions = realloc(arr->instructions, arr->capacity * sizeof(int) * 2);
@@ -127,22 +127,21 @@ void instruction_array_append(struct InstructionArray* arr, int value){
   arr->size++;
 }
 
-// Purpose: Update a byte within an existing 32-bit word.
-// Inputs: word points to the word to update; byte_index is 0..3; value is the byte payload.
-// Outputs: None.
-// Invariants/Assumptions: byte_index is less than kWordBytes.
+// Update a byte within an existing 32-bit word.
 static void set_word_byte(int* word, int byte_index, uint8_t value){
   uint32_t mask = (uint32_t)kByteMask << (8 * byte_index);
   uint32_t updated = ((uint32_t)(*word) & ~mask) | ((uint32_t)value << (8 * byte_index));
   *word = (int)updated;
 }
 
+// Append a 16-bit value at its byte address in little-endian order.
 void instruction_array_append_double(struct InstructionArray* arr, uint16_t value, int pc){
   // Little-endian: low byte goes at the lowest address.
   instruction_array_append_byte(arr, (uint8_t)(value & kByteMask), pc);
   instruction_array_append_byte(arr, (uint8_t)((value >> 8) & kByteMask), pc + kByteStride);
 }
 
+// Append an 8-bit value at its byte address.
 void instruction_array_append_byte(struct InstructionArray* arr, uint8_t value, int pc){
   int byte_index = pc % kWordBytes;
   if (byte_index == 0){
@@ -152,17 +151,20 @@ void instruction_array_append_byte(struct InstructionArray* arr, uint8_t value, 
   set_word_byte(&arr->instructions[arr->size - 1], byte_index, value);
 }
 
+// Read the word containing the requested instruction-array index.
 int instruction_array_get(struct InstructionArray* arr, size_t i){
   // no checks on i, might regret this later
   return arr->instructions[i];
 }
 
+// Recursively free an instruction-array node and its successors.
 void destroy_instruction_array(struct InstructionArray* arr){
   if (arr->next != NULL) destroy_instruction_array(arr->next);
   free(arr->instructions);
   free(arr);
 }
 
+// Print instruction array.
 void print_instruction_array(struct InstructionArray* arr){
   printf("@%d\n", arr->origin);
   for (int i = 0; i < arr->size; ++i){
@@ -171,6 +173,7 @@ void print_instruction_array(struct InstructionArray* arr){
   if (arr->next != NULL) print_instruction_array(arr->next);
 }
 
+// Print instruction array.
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw){
   // raw => no ELF structure => put origin markers
   if (raw) fprintf(ptr, "@%X\n", arr->origin / 4);
@@ -180,6 +183,7 @@ void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw)
   if (arr->next != NULL) fprint_instruction_array(ptr, arr->next, raw);
 }
 
+// Return the total number of words in all arrays in the list.
 size_t instruction_array_list_size(struct InstructionArrayList* list){
   size_t total_size = 0;
   struct InstructionArray* curr = list->head;
