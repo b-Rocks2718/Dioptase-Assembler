@@ -13,6 +13,7 @@ if ! command -v "${VALGRIND:-valgrind}" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Run suite.
 run_suite() {
   local target="$1"
   local log

@@ -14,14 +14,14 @@ static size_t live_allocations;
 static size_t allocation_calls;
 static size_t fail_on_call;
 
-static void* tracked_malloc(size_t size) {
+static void* tracked_malloc(size_t size) { /* Allocate memory and record the allocation for the test. */
   if (++allocation_calls == fail_on_call) return NULL;
   void* ptr = malloc(size);
   if (ptr != NULL) live_allocations++;
   return ptr;
 }
 
-static void tracked_free(void* ptr) {
+static void tracked_free(void* ptr) { /* Release memory and record the deallocation for the test. */
   if (ptr != NULL) {
     assert(live_allocations > 0 && "free must match a tracked allocation");
     live_allocations--;
@@ -35,7 +35,7 @@ static void tracked_free(void* ptr) {
 #undef malloc
 #undef free
 
-int main(void) {
+int main(void) { /* Exercise preprocessor allocation test behavior. */
   const size_t allocation_count = 3;
   int file_names[] = {0, 1};
   const char* argv[] = {"first.s", "second.s"};

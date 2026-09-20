@@ -69,10 +69,12 @@ static const uint32_t kByteBytes = 1;
 #define SECTION_ALIGN 0x1000u
 static const uint32_t kKernelSectionAlign = 512;
 
+// Reset section offsets.
 static void reset_section_offsets(void) {
   for (int i = 0; i < SECTION_COUNT; ++i) section_offsets[i] = 0;
 }
 
+// Reset section load bases.
 static void reset_section_load_bases(void) {
   for (int i = 0; i < SECTION_COUNT; ++i) {
     section_load_bases[i] = 0;
@@ -80,24 +82,21 @@ static void reset_section_load_bases(void) {
   }
 }
 
+// Round a value up to the requested alignment.
 static uint32_t align_up(uint32_t value, uint32_t align) {
   uint32_t rem = value % align;
   if (rem == 0) return value;
   return value + (align - rem);
 }
 
-// Purpose: Return the base address used for pc-relative computations.
-// Inputs: section selects the active section.
-// Outputs: Returns the runtime base for the section.
-// Invariants/Assumptions: section_load_bases is initialized before pass 2.
+// Return the load base of the section used by PC-relative calculations.
+// Returns the runtime base for the section.
 static uint32_t section_pc_base(enum UserSection section){
   return section_load_bases[section];
 }
 
-// Purpose: Check whether a section index is valid for the active mode.
-// Inputs: section is the current section index.
-// Outputs: Returns true when section is usable in the current mode.
-// Invariants/Assumptions: Kernel mode allows the implicit section; user mode does not.
+// Check whether a section index is valid for the active mode.
+// Returns true when section is usable in the current mode.
 static bool is_section_in_range(enum UserSection section){
   if (is_kernel){
     return section >= TEXT_SECTION && section <= IMPLICIT_SECTION;
@@ -108,18 +107,14 @@ static bool is_section_in_range(enum UserSection section){
 // Forward declaration for alignment parsing helpers.
 static long consume_define_or_literal(enum ConsumeResult* result, const char* context);
 
-// Purpose: Check whether a value is a power-of-two alignment.
-// Inputs: value is the candidate alignment in bytes.
-// Outputs: Returns true when value is a nonzero power of two.
-// Invariants/Assumptions: value is treated as a 32-bit unsigned alignment.
+// Check whether a value is a power-of-two alignment.
+// Returns true when value is a nonzero power of two.
 static bool is_power_of_two_u32(uint32_t value){
   return value != 0 && (value & (value - 1)) == 0;
 }
 
-// Purpose: Parse and validate a byte alignment value for .align.
-// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; directive labels errors.
-// Outputs: Returns true on success and fills alignment_out.
-// Invariants/Assumptions: alignment_out is non-NULL.
+// Parse and validate a byte alignment value for .align.
+// Returns true on success and fills alignment_out.
 static bool parse_alignment(enum ConsumeResult* result, const char* directive,
                             uint32_t* alignment_out){
   long imm = consume_define_or_literal(result, directive);
@@ -145,10 +140,8 @@ static bool parse_alignment(enum ConsumeResult* result, const char* directive,
   return true;
 }
 
-// Purpose: Parse a kernel section load-base directive such as .text_load.
-// Inputs: section is the target section; directive is the directive name.
-// Outputs: Returns true on success; updates section_load_bases during pass 1.
-// Invariants/Assumptions: section_offsets reflect content emitted so far.
+// Parse a kernel section load-base directive such as .text_load.
+// Returns true on success; updates section_load_bases during pass 1.
 static bool parse_section_load_directive(enum UserSection section, const char* directive){
   if (!is_kernel){
     print_error();
@@ -199,20 +192,16 @@ static bool parse_section_load_directive(enum UserSection section, const char* d
   return true;
 }
 
-// Purpose: Encode the least-significant bytes of value in little-endian order.
-// Inputs: value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
-// Outputs: out is filled with count bytes.
-// Invariants/Assumptions: count is nonzero and no more than kWordBytes.
+// Encode the least-significant bytes of value in little-endian order.
+// value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
 static void encode_value_bytes(uint32_t value, uint8_t* out, uint32_t count){
   for (uint32_t i = 0; i < count; ++i){
     out[i] = (uint8_t)(value >> (8 * i));
   }
 }
 
-// Purpose: Append raw bytes into a section array and advance offsets.
-// Inputs: arr is the destination array; bytes/count describe the payload; section selects base/offset.
-// Outputs: section_offsets and pc are incremented by count bytes.
-// Invariants/Assumptions: section_bases are initialized and aligned.
+// Append raw bytes into a section array and advance offsets.
+// section_bases are initialized and aligned.
 static void append_bytes_user(struct InstructionArray* arr, const uint8_t* bytes, uint32_t count,
                               enum UserSection section){
   for (uint32_t i = 0; i < count; ++i){
@@ -223,10 +212,8 @@ static void append_bytes_user(struct InstructionArray* arr, const uint8_t* bytes
   pc = section_pc_base(section) + section_offsets[section];
 }
 
-// Purpose: Append zero bytes into a section array and advance offsets.
-// Inputs: arr is the destination array; count is the number of zero bytes; section selects base/offset.
-// Outputs: section_offsets and pc are incremented by count bytes.
-// Invariants/Assumptions: section_bases are initialized and aligned.
+// Append zero bytes into a section array and advance offsets.
+// section_bases are initialized and aligned.
 static void append_zero_bytes_user(struct InstructionArray* arr, uint32_t count, enum UserSection section){
   for (uint32_t i = 0; i < count; ++i){
     uint32_t abs_pc = section_bases[section] + section_offsets[section];
@@ -236,10 +223,8 @@ static void append_zero_bytes_user(struct InstructionArray* arr, uint32_t count,
   pc = section_pc_base(section) + section_offsets[section];
 }
 
-// Purpose: Report misaligned instruction addresses with context.
-// Inputs: address is the misaligned byte address or section offset; label describes the address.
-// Outputs: Returns false after emitting an error.
-// Invariants/Assumptions: print_error has access to current file/line context.
+// Report misaligned instruction addresses with context.
+// Returns false after emitting an error.
 static bool report_instruction_alignment_error(uint32_t address, const char* label){
   print_error();
   fprintf(stderr, "Instruction address must be %u-byte aligned; %s is 0x%08X\n",
@@ -247,6 +232,7 @@ static bool report_instruction_alignment_error(uint32_t address, const char* lab
   return false;
 }
 
+// Compute the user-section load addresses from their emitted sizes.
 static void compute_section_bases(void) {
   section_bases[TEXT_SECTION] = USER_BASE_ADDR;
   section_bases[RODATA_SECTION] = align_up(section_bases[TEXT_SECTION] + section_sizes[TEXT_SECTION], SECTION_ALIGN);
@@ -254,10 +240,7 @@ static void compute_section_bases(void) {
   section_bases[BSS_SECTION] = section_bases[DATA_SECTION] + section_sizes[DATA_SECTION];
 }
 
-// Purpose: Compute kernel section bases with 512-byte padding between sections.
-// Inputs: None.
-// Outputs: section_bases is filled for kernel sections, with implicit section first.
-// Invariants/Assumptions: section_sizes contains byte sizes for each section.
+// Compute kernel section bases with 512-byte padding between sections.
 static void compute_kernel_section_bases(void){
   uint32_t cursor = 0;
   section_bases[IMPLICIT_SECTION] = cursor;
@@ -278,10 +261,7 @@ static void compute_kernel_section_bases(void){
   section_bases[END_SECTION] = cursor;
 }
 
-// Purpose: Finalize runtime section bases after sizes are known.
-// Inputs: None.
-// Outputs: section_load_bases is filled for all sections.
-// Invariants/Assumptions: section_bases and section_sizes are initialized.
+// Finalize runtime section bases after sizes are known.
 static void finalize_section_load_bases(void){
   for (int i = 0; i < SECTION_COUNT; ++i){
     if (!section_load_set[i]) section_load_bases[i] = section_bases[i];
@@ -292,11 +272,13 @@ static void finalize_section_load_bases(void){
   }
 }
 
+// Pack a section index and offset for resolution after layout.
 static uint64_t encode_section_offset(enum UserSection section, uint32_t offset) {
   // Pack section + offset for pass 1; resolved to absolute addresses after layout.
   return ((uint64_t)section << 32) | offset;
 }
 
+// Replace packed section offsets in a label map with absolute addresses.
 static void adjust_label_map_for_sections(struct HashMap* map) {
   // Convert packed section offsets into absolute addresses once section sizes are known.
   for (size_t i = 0; i < map->size; ++i){
@@ -313,6 +295,7 @@ static void adjust_label_map_for_sections(struct HashMap* map) {
   }
 }
 
+// Check that the current directive is being emitted in an allowed section.
 static bool ensure_valid_section(const char* context) {
   if (!is_section_in_range(current_section)) {
     print_error();
@@ -328,10 +311,12 @@ static bool ensure_valid_section(const char* context) {
   return true;
 }
 
+// Return whether c may occur after the first character of an identifier.
 static bool is_identifier_char(char c) {
   return isalnum((unsigned char)c) || c == '_' || c == '.';
 }
 
+// Return whether a source span is a valid .define name.
 static bool is_valid_define_name(const char* start, size_t len) {
   if (len == 0) return false;
   if (!isalpha((unsigned char)start[0]) && start[0] != '_') return false;
@@ -341,11 +326,13 @@ static bool is_valid_define_name(const char* start, size_t len) {
   return true;
 }
 
+// Set the command-line definitions used while preprocessing each input.
 void set_cli_defines(int count, const char* const* defines){
   cli_define_count = count;
   cli_defines = defines;
 }
 
+// Insert command-line definitions into the current definition map.
 static bool apply_cli_defines(void){
   if (cli_define_count <= 0) return true;
   for (int i = 0; i < cli_define_count; ++i){
@@ -400,6 +387,7 @@ static bool apply_cli_defines(void){
   return true;
 }
 
+// Consume name when it denotes a complete register token.
 static bool consume_named_register(const char* name) {
   size_t len = strlen(name);
   if (strncmp(current, name, len) == 0 && !is_identifier_char(current[len])) {
@@ -436,6 +424,7 @@ void print_error(void) {
   }
 }
 
+// Print a warning at the current source location.
 static void print_warning(const char* message) {
   fprintf(stderr, "Warning in %s\nline %u: \"", current_file, line_count);
 
@@ -520,7 +509,8 @@ static bool is_identifier_body_char(char c){
 // attempt to consume a keyword, has no effect if a match is not found
 // differs from consume because we ensure token boundaries on both sides
 bool consume_keyword(const char* str) {
-  // skip is handled by caller so that this function is useful for preprocesser/macros
+  // Whitespace is intentionally left to the caller because preprocessing also
+  // uses this matcher.
   if (current != current_buffer_start &&
       is_identifier_body_char(current[-1])) {
     return false;
@@ -538,7 +528,6 @@ bool consume_keyword(const char* str) {
         current += i;
         return true;
       } else {
-        // this is actually an identifier
         return false;
       }
     }
@@ -593,7 +582,7 @@ struct Slice* consume_filename(void) {
   }
 }
 
-// label is an identifier followed by a colon
+// Consume an identifier followed by ':' and return its source span.
 struct Slice* consume_label(void){
   skip();
   char const * old_current = current;
@@ -606,7 +595,7 @@ struct Slice* consume_label(void){
   return NULL;
 }
 
-// label is an identifier followed by a colon
+// Consume a label without emitting an instruction for it.
 bool skip_label(struct InstructionArrayList* instructions){
   skip();
   char const * old_current = current;
@@ -808,10 +797,8 @@ long consume_literal(enum ConsumeResult* result) {
   }
 }
 
-// Purpose: Parse a numeric literal or a .define constant (no labels allowed).
-// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; context labels the directive for errors.
-// Outputs: Returns the literal or constant value when FOUND; returns 0 otherwise.
-// Invariants/Assumptions: local_defines for the current file is initialized.
+// Parse a numeric literal or a .define constant (no labels allowed).
+// Returns the literal or constant value when FOUND; returns 0 otherwise.
 static long consume_define_or_literal(enum ConsumeResult* result, const char* context) {
   long imm = consume_literal(result);
   if (*result != NOT_FOUND) return imm;
@@ -841,10 +828,8 @@ static long consume_define_or_literal(enum ConsumeResult* result, const char* co
   return imm;
 }
 
-// Purpose: Parse a numeric literal, .define constant, or label absolute address.
-// Inputs: result is filled with FOUND/NOT_FOUND/ERROR; context labels the directive for errors.
-// Outputs: Returns the literal, constant, or label address when FOUND; returns 0 otherwise.
-// Invariants/Assumptions: label maps are absolute-addressed in pass 2.
+// Parse a numeric literal, .define constant, or label absolute address.
+// Returns the literal, constant, or label address when FOUND; returns 0 otherwise.
 static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
                                                    const char* context) {
   long imm = consume_literal(result);
@@ -896,6 +881,7 @@ static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
   return imm;
 }
 
+// Consume a label operand and resolve it to an immediate value.
 long consume_label_imm(enum ConsumeResult* result){
   struct Slice* label = consume_identifier();
   long imm = 0;
@@ -948,6 +934,7 @@ long consume_immediate(enum ConsumeResult* result){
   return imm;
 }
 
+// Encode an immediate accepted by the bitwise-immediate instruction form.
 int encode_bitwise_immediate(long imm, bool* success){
   if (imm == (imm & 0xFF)){
     return imm;
@@ -967,6 +954,7 @@ int encode_bitwise_immediate(long imm, bool* success){
   }
 }
 
+// Encode an immediate accepted by the shift instruction form.
 int encode_shift_immediate(long imm, bool* success){
   if (0 <= imm && imm < 31){
     return imm;
@@ -979,6 +967,7 @@ int encode_shift_immediate(long imm, bool* success){
   }
 }
 
+// Encode a signed 12-bit arithmetic immediate.
 int encode_arithmetic_immediate(long imm, bool* success){
   if (-(1 << 11) <= imm && imm < (1 << 11)){
     return imm & 0xFFF;
@@ -1058,7 +1047,6 @@ int consume_alu_op(int alu_op, bool* success){
     instruction |= encoding;
   } else {
     // and ra, rb, rc
-    // opcode is 0
     instruction |= ra << 22;
     instruction |= rb << 17;
     instruction |= rc;
@@ -1068,6 +1056,7 @@ int consume_alu_op(int alu_op, bool* success){
   return instruction; 
 }
 
+// Parse a compare instruction and return its encoded word.
 int consume_cmp(bool* success){
   int rb = consume_register();
   if (rb == -1){
@@ -1101,7 +1090,6 @@ int consume_cmp(bool* success){
 
     instruction |= encoding;
   } else {
-    // opcode is 0
     instruction |= rb << 17;
     instruction |= rc;
     instruction |= 16 << 5; // alu_op
@@ -1110,6 +1098,7 @@ int consume_cmp(bool* success){
   return instruction; 
 }
 
+// Encode the aligned immediate field required by LUI.
 int encode_lui_immediate(long imm, bool* success){
   if ((imm & 0x3FF) == 0 && imm < ((long)1 << 32)){
     return ((int)imm >> 10) & 0x3FFFFF;
@@ -1122,6 +1111,7 @@ int encode_lui_immediate(long imm, bool* success){
   }
 }
 
+// Parse a LUI instruction and return its encoded word.
 int consume_lui(bool* success){
   enum ConsumeResult result;
   int ra = consume_register();
@@ -1150,6 +1140,7 @@ int consume_lui(bool* success){
   return instruction;
 }
 
+// Encode an absolute memory address in the instruction's split immediate fields.
 int encode_absolute_memory_immediate(long imm, bool* success){
   // top n bits must all be 0s or all be 1s
   // bottom m bits must be 0s
@@ -1173,6 +1164,7 @@ int encode_absolute_memory_immediate(long imm, bool* success){
   }
 }
 
+// Encode a signed 16-bit memory offset.
 int encode_relative_memory_immediate(long imm, bool* success){
   if (-(1L << 15) <= imm && imm < (1L << 15)){
     return (int)imm & 0xFFFF;
@@ -1187,6 +1179,7 @@ int encode_relative_memory_immediate(long imm, bool* success){
   }
 }
 
+// Encode the wider relative offset used by long memory instructions.
 int encode_long_relative_memory_immediate(long imm, bool* success){
   if (-(1L << 20) <= imm && imm < (1L << 20)){
     return (int)imm & 0x1FFFFF;
@@ -1201,6 +1194,7 @@ int encode_long_relative_memory_immediate(long imm, bool* success){
   }
 }
 
+// Parse a memory instruction, including its addressing mode and width.
 int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
   int instruction = 0;
 
@@ -1326,6 +1320,7 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
   return instruction;
 }
 
+// Encode a signed branch displacement.
 int encode_branch_immediate(long imm, bool* success){
   if (-(1 << 23) <= imm && imm < (1 << 23) && (imm & 3) == 0){
     return (imm >> 2) & 0x3FFFFF;
@@ -1338,6 +1333,7 @@ int encode_branch_immediate(long imm, bool* success){
   }
 }
 
+// Encode the displacement used by ADPC.
 int encode_adpc_immediate(long imm, bool* success){
   if (-(1L << 21) <= imm && imm < (1L << 21)){
     return (int)imm & 0x3FFFFF;
@@ -1350,6 +1346,7 @@ int encode_adpc_immediate(long imm, bool* success){
   }
 }
 
+// Parse a conditional branch and return its encoded word.
 int consume_branch(int branch_code, bool is_absolute, bool* success){
   int instruction = 0;
 
@@ -1394,6 +1391,7 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
   return instruction;
 }
 
+// Parse an ADPC instruction and return its encoded word.
 int consume_adpc(bool* success){
   int ra = consume_register();
   if (ra == -1){
@@ -1449,11 +1447,13 @@ int consume_jmp(bool* success){
   return instruction;
 }
 
+// Parse a trap instruction and return its encoded word.
 int consume_trap(bool* success){
   (void)success;
   return 15 << 27;
 }
 
+// Encode the short immediate form accepted by an atomic instruction.
 int encode_short_atomic_immediate(long imm, bool* success){
   if (-(1L << 11) <= imm && imm < (1L << 11)){
     return (int)imm & 0xFFF;
@@ -1468,6 +1468,7 @@ int encode_short_atomic_immediate(long imm, bool* success){
   }
 }
 
+// Encode the long immediate form accepted by an atomic instruction.
 int encode_long_atomic_immediate(long imm, bool* success){
   if (-(1L << 16) <= imm && imm < (1L << 16)){
     return (int)imm & 0x1FFFF;
@@ -1482,6 +1483,7 @@ int encode_long_atomic_immediate(long imm, bool* success){
   }
 }
 
+// Parse an atomic instruction and return its encoded word.
 int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
   int instruction = 0;
 
@@ -1578,6 +1580,7 @@ int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
   return instruction;
 }
 
+// Reject an instruction unavailable in the current privilege mode.
 void check_privileges(bool* success){
   static bool has_printed = false;
   // Privileged instructions require -kernel flag
@@ -1592,6 +1595,7 @@ void check_privileges(bool* success){
   }
 }
 
+// Parse a TLB-management instruction and return its encoded word.
 int consume_tlb_op(int tlb_op, bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1648,6 +1652,7 @@ int consume_tlb_op(int tlb_op, bool* success){
   return instruction;
 }
 
+// Parse a control-register move instruction and return its encoded word.
 int consume_crmv(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1703,6 +1708,7 @@ int consume_crmv(bool* success){
   return instruction;
 }
 
+// Parse an end-of-interrupt instruction.
 int consume_eoi(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1736,6 +1742,7 @@ int consume_eoi(bool* success){
   return instruction;
 }
 
+// Parse an instruction that changes processor mode state.
 int consume_mode_op(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1759,6 +1766,7 @@ int consume_mode_op(bool* success){
   return instruction;
 }
 
+// Parse a return-from-exception instruction.
 int consume_rfe(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1769,6 +1777,7 @@ int consume_rfe(bool* success){
   return instruction;
 }
 
+// Parse an interprocessor-interrupt instruction.
 int consume_ipi(bool* success){
   check_privileges(success);
   if (!*success) return 0;
@@ -1846,8 +1855,7 @@ int consume_mov_hack(int mov_type, bool* success){
     return 0;
   }
 
-  // movu8 and movl4 are used when the immediate is a label
-  // normal movu and movl used otherwise
+  // Label immediates select movu8/movl4; numeric immediates use movu/movl.
 
   // [0] movu := lui rA, (imm & 0xFFFFFC00)
   // [1] movl := addi rA, rA, (imm & 0x3FF)
@@ -1860,7 +1868,6 @@ int consume_mov_hack(int mov_type, bool* success){
   int instruction = 0;
 
   if (mov_type & 1){
-    // this is movl or movl8
 
     instruction |= 1 << 27; // opcode for add
     instruction |= ra << 22;
@@ -1873,7 +1880,6 @@ int consume_mov_hack(int mov_type, bool* success){
 
     instruction |= encoding;
   } else {
-    // this is movu or movu8
     int encoding = encode_lui_immediate(imm & 0xFFFFFC00, success);
 
     assert(encoding == (encoding & 0x3FFFFF)); // ensure immediate fits in 22 bits
@@ -1886,6 +1892,7 @@ int consume_mov_hack(int mov_type, bool* success){
   return instruction; 
 }
 
+// Parse and store a .define directive in the current definition map.
 void record_define(bool* success){
   struct Slice* label = consume_identifier();
   if (label == NULL){
@@ -2068,10 +2075,8 @@ int consume_instruction(enum ConsumeResult* result){
   return instruction;
 }
 
-// Purpose: First pass to collect labels and section sizes without emitting output.
-// Inputs: prog is the preprocessed source buffer for one file.
-// Outputs: Returns true on success; updates label maps and section offsets.
-// Invariants/Assumptions: current_file_index is set; section_offsets track byte offsets.
+// First pass to collect labels and section sizes without emitting output.
+// Returns true on success; updates label maps and section offsets.
 bool process_labels(char const* const prog){
   current = prog;
   current_buffer_start = prog - 1;
@@ -2353,10 +2358,8 @@ bool process_labels(char const* const prog){
   return true;
 }
 
-// Purpose: Second pass to emit instruction/data bytes into output sections.
-// Inputs: prog is the preprocessed source buffer; instructions is the output list.
-// Outputs: Returns true on success; appends words to instruction arrays and updates bss_size.
-// Invariants/Assumptions: section_bases are computed; section_offsets track byte offsets.
+// Second pass to emit instruction/data bytes into output sections.
+// Returns true on success; appends words to instruction arrays and updates bss_size.
 bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
   current = prog;
   current_buffer_start = prog - 1;
@@ -2678,6 +2681,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
   return true;
 }
 
+// Append labels from a definition map to the output label list.
 static void append_labels_from_map(struct HashMap* map, struct LabelList* labels, uint32_t offset){
   for (size_t i = 0; i < map->size; ++i){
     struct HashEntry* entry = map->arr[i];
@@ -2712,9 +2716,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   debug_info_list = create_debug_info_list();
 
   if (labels_out != NULL) *labels_out = NULL;
-  if (labels_out_c != NULL) {
-    *labels_out_c = debug_info_list;
-  }
+  if (labels_out_c != NULL) *labels_out_c = NULL;
 
   current_file_index = 0;
 
@@ -2736,6 +2738,8 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
       free(local_defines);
       free(local_globals);
       destroy_hash_map(global_labels);
+      destroy_debug_info_list(debug_info_list);
+      debug_info_list = NULL;
       return NULL;
     }
   }
@@ -2770,6 +2774,8 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
       free(local_defines);
       free(local_globals);
       destroy_hash_map(global_labels);
+      destroy_debug_info_list(debug_info_list);
+      debug_info_list = NULL;
       return NULL;
     }
     entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
@@ -2825,6 +2831,8 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
       free(local_globals);
       destroy_hash_map(global_labels);
       destroy_instruction_array_list(instructions);
+      destroy_debug_info_list(debug_info_list);
+      debug_info_list = NULL;
       return NULL;
     }
   }
@@ -2857,6 +2865,13 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   program->entry_point = entry_point;
   program->sections = instructions;
   program->bss_size = bss_size;
+
+  if (labels_out_c != NULL) {
+    *labels_out_c = debug_info_list;
+  } else {
+    destroy_debug_info_list(debug_info_list);
+  }
+  debug_info_list = NULL;
 
   return program;
 }

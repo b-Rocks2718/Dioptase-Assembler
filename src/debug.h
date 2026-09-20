@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// The debug local stores name, offset, size, addr.
 struct DebugLocal {
   struct Slice* name;          // Name of the local variable
   int offset;                 // Offset from base pointer (BP)
@@ -13,28 +14,33 @@ struct DebugLocal {
   uint32_t addr;              // Address where this local becomes visible
 };
 
+// The debug line stores file_name, line_number, addr.
 struct DebugLine {
   struct Slice* file_name;      // Source file name
   int line_number;            // Line number in the source file
   uint32_t addr;              // Address of the next instruction for this line
 };
 
+// The debug info stores locals, lines.
 union DebugInfo {
   struct DebugLocal* locals;  // Linked list of local variables
   struct DebugLine* lines;    // Linked list of source lines
 };
 
+// Identify the possible debug info type values.
 enum DebugInfoType {
   DEBUG_INFO_LOCALS,
   DEBUG_INFO_LINES,
 };
 
+// The one debug entry stores type, info, next.
 struct DebugEntry {
   enum DebugInfoType type;    // Type of debug information
   union DebugInfo info;       // Actual debug information
   struct DebugEntry* next;    // Next debug entry in the list
 };
 
+// The debug info list stores head, tail.
 struct DebugInfoList {
   struct DebugEntry* head;    // Head of the debug entries list
   struct DebugEntry* tail;    // Tail of the debug entries list

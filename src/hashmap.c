@@ -5,6 +5,7 @@
 #include "hashmap.h"
 #include "slice.h"
 
+// Allocate an empty hash map with the requested bucket count.
 struct HashMap* create_hash_map(size_t num_buckets){
   struct HashEntry** arr = malloc(num_buckets * sizeof(struct HashEntry*));
   struct HashMap* hmap = malloc(sizeof(struct HashMap));
@@ -19,6 +20,7 @@ struct HashMap* create_hash_map(size_t num_buckets){
   return hmap;
 }
 
+// Allocate a hash entry for a key/value pair.
 struct HashEntry* create_hash_entry(struct Slice* key, long value, bool is_def, bool is_data){
   struct HashEntry* entry = malloc(sizeof(struct HashEntry));
 
@@ -31,6 +33,7 @@ struct HashEntry* create_hash_entry(struct Slice* key, long value, bool is_def, 
   return entry;
 }
 
+// Insert or replace a key in one collision-chain entry.
 void hash_entry_insert(struct HashEntry* entry, struct Slice* key, long value, bool is_def, bool is_data){
   if (compare_slice_to_slice(entry->key, key)){
     entry->value = value;
@@ -42,6 +45,7 @@ void hash_entry_insert(struct HashEntry* entry, struct Slice* key, long value, b
   }
 }
 
+// Insert or replace a key in the map.
 void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool is_def, bool is_data){
   size_t hash = hash_slice(key) % hmap->size;
   
@@ -52,6 +56,7 @@ void hash_map_insert(struct HashMap* hmap, struct Slice* key, long value, bool i
   }
 }
 
+// Look up a key in one collision chain.
 long hash_entry_get(struct HashEntry* entry, struct Slice* key){
   if (compare_slice_to_slice(entry->key, key)){
     return entry->value;
@@ -62,6 +67,7 @@ long hash_entry_get(struct HashEntry* entry, struct Slice* key){
   }
 }
 
+// Look up a key in the map, returning its stored value.
 long hash_map_get(struct HashMap* hmap, struct Slice* key){
   size_t hash = hash_slice(key) % hmap->size;
 
@@ -72,6 +78,7 @@ long hash_map_get(struct HashMap* hmap, struct Slice* key){
   }
 }
 
+// Return whether a collision chain contains a key.
 bool hash_entry_contains(struct HashEntry* entry, struct Slice* key){
   if (compare_slice_to_slice(entry->key, key)){
     return true;
@@ -82,6 +89,7 @@ bool hash_entry_contains(struct HashEntry* entry, struct Slice* key){
   }
 }
 
+// Return whether a collision chain contains a defined key.
 bool hash_entry_contains_def(struct HashEntry* entry, struct Slice* key){
   if (compare_slice_to_slice(entry->key, key) && entry->is_defined){
     return true;
@@ -92,6 +100,7 @@ bool hash_entry_contains_def(struct HashEntry* entry, struct Slice* key){
   }
 }
 
+// Return whether the map contains a key.
 bool hash_map_contains(struct HashMap* hmap, struct Slice* key){
   size_t hash = hash_slice(key) % hmap->size;
 
@@ -102,6 +111,7 @@ bool hash_map_contains(struct HashMap* hmap, struct Slice* key){
   }
 }
 
+// Return whether a label has been defined rather than only referenced.
 bool label_has_definition(struct HashMap* hmap, struct Slice* key){
   size_t hash = hash_slice(key) % hmap->size;
 
@@ -112,6 +122,7 @@ bool label_has_definition(struct HashMap* hmap, struct Slice* key){
   }
 }
 
+// Mark an entry as defined and update its value.
 void make_entry_defined(struct HashEntry* entry, struct Slice* key, long value){
   if (compare_slice_to_slice(entry->key, key)){
     entry->is_defined = true;
@@ -122,6 +133,7 @@ void make_entry_defined(struct HashEntry* entry, struct Slice* key, long value){
   }
 }
 
+// Mark a map entry as defined and update its value.
 void make_defined(struct HashMap* hmap, struct Slice* key, long value){
   size_t hash = hash_slice(key) % hmap->size;
 
@@ -130,12 +142,14 @@ void make_defined(struct HashMap* hmap, struct Slice* key, long value){
   make_entry_defined(hmap->arr[hash], key, value);
 }
 
+// Recursively free an entry and the rest of its collision chain.
 void destroy_hash_entry(struct HashEntry* entry){
   if (entry->next !=  NULL) destroy_hash_entry(entry->next);
   free(entry->key);
   free(entry);
 }
 
+// Free every collision chain and the hash map's bucket storage.
 void destroy_hash_map(struct HashMap* hmap){
   for (int i = 0; i < hmap->size; ++i){
     if (hmap->arr[i] != NULL) destroy_hash_entry(hmap->arr[i]);

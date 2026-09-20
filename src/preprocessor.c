@@ -41,6 +41,7 @@ bool skip_comments(void){
   return true;
 }
 
+// Replace nop with the canonical no-op instruction encoding.
 void expand_nop(void){
   #define NOP_EXPANSION "and  r0, r0, r0"
 
@@ -49,6 +50,7 @@ void expand_nop(void){
   result_index += sprintf(result + result_index, NOP_EXPANSION);
 }
 
+// Replace ret with the stack restore and indirect jump sequence.
 void expand_ret(void){
   #define RET_EXPANSION "jmp  r29"
 
@@ -57,6 +59,7 @@ void expand_ret(void){
   result_index += sprintf(result + result_index, RET_EXPANSION);
 }
 
+// Expand push into a stack decrement followed by a store.
 void expand_push(bool* success){
   #define PUSH_EXPANSION "swa  r%d [sp, -4]!"
 
@@ -74,6 +77,7 @@ void expand_push(bool* success){
   result_index += sprintf(result + result_index, PUSH_EXPANSION, ra);
 }
 
+// Expand pop into a load followed by a stack increment.
 void expand_pop(bool* success){
   #define POP_EXPANSION "lwa  r%d, [sp], 4"
 
@@ -91,6 +95,7 @@ void expand_pop(bool* success){
   result_index += sprintf(result + result_index, POP_EXPANSION, ra);
 }
 
+// Expand pshd into the double-width stack-save sequence.
 void expand_pshd(bool* success){
   #define PSHD_EXPANSION "sda  r%d [sp, -2]!"
 
@@ -108,6 +113,7 @@ void expand_pshd(bool* success){
   result_index += sprintf(result + result_index, PSHD_EXPANSION, ra);
 }
 
+// Expand popd into the double-width stack-restore sequence.
 void expand_popd(bool* success){
   #define POPD_EXPANSION "lda  r%d, [sp], 2"
 
@@ -125,6 +131,7 @@ void expand_popd(bool* success){
   result_index += sprintf(result + result_index, POPD_EXPANSION, ra);
 }
 
+// Expand pshb into the byte-width stack-save sequence.
 void expand_pshb(bool* success){
   #define PSHB_EXPANSION "sba  r%d [sp, -1]!"
 
@@ -142,6 +149,7 @@ void expand_pshb(bool* success){
   result_index += sprintf(result + result_index, PSHB_EXPANSION, ra);
 }
 
+// Expand popb into the byte-width stack-restore sequence.
 void expand_popb(bool* success){
   #define POPB_EXPANSION "lba  r%d, [sp], 1"
 
@@ -159,6 +167,7 @@ void expand_popb(bool* success){
   result_index += sprintf(result + result_index, POPB_EXPANSION, ra);
 }
 
+// Expand movi into the immediate-load instruction sequence.
 void expand_movi(bool* success){
   #define MOVI_EXPANSION_LIT "movu r%d, 0x%X; movl r%d, 0x%X"
   #define MOVI_EXPANSION_LBL_1 "movu r%d, "
@@ -207,6 +216,7 @@ void expand_movi(bool* success){
   }
 }
 
+// Expand mov into the register or immediate form selected by its operands.
 void expand_mov(bool* success){
   #define MOV_EXPANSION_USR "add  r%d, r%d, r0"
   #define MOV_EXPANSION_CR_1 "crmv r%d, cr%d"
@@ -267,6 +277,7 @@ void expand_mov(bool* success){
   return;
 }
 
+// Expand call into a link-register save and control transfer.
 void expand_call(bool* success){
   // immediates can be numbers or labels
 
@@ -310,6 +321,7 @@ void expand_call(bool* success){
   }
 }
 
+// Scan the source and expand all recognized assembler pseudo-operations.
 bool expand_macros(void){
   bool success = true;
   if (consume_keyword("nop")) expand_nop();

@@ -21,12 +21,14 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kerne
 
 void set_cli_defines(int count, const char* const* defines);
 
+// Identify the possible consume result values.
 enum ConsumeResult {
   ERROR,
   NOT_FOUND,
   FOUND
 };
 
+// Identify the possible user section values.
 enum UserSection {
   TEXT_SECTION = 0,
   RODATA_SECTION = 1,
@@ -62,7 +64,6 @@ bool consume_keyword(const char* str);
 // attempt to consume an identifier, has no effect if a match is not found
 struct Slice* consume_identifier(void);
 
-// label is an identifier followed by a colon
 struct Slice* consume_label(void);
 
 // attempt to consume a register

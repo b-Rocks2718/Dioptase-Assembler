@@ -7,6 +7,7 @@ readonly SCRIPT_PATH="$REPO_DIR/.github/scripts/valgrind.sh"
 # Keep this distinct from the assembler's ordinary success/failure statuses.
 readonly MEMCHECK_ERROR_EXIT_CODE=97
 
+# Run under memcheck.
 run_under_memcheck() {
   if [ "$#" -eq 0 ]; then
     echo "Assembler Valgrind: --run requires an executable." >&2
@@ -28,8 +29,8 @@ run_under_memcheck() {
     --tool=memcheck \
     --quiet \
     --leak-check=full \
-    --show-leak-kinds=definite,indirect \
-    --errors-for-leak-kinds=definite,indirect \
+    --show-leak-kinds=all \
+    --errors-for-leak-kinds=all \
     --track-origins=yes \
     --error-exitcode="$MEMCHECK_ERROR_EXIT_CODE" \
     --log-file="$log" \
