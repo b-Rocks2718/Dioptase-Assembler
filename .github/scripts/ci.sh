@@ -8,6 +8,10 @@ if ! command -v clang >/dev/null 2>&1; then
   echo "Assembler CI: clang is required for static analysis." >&2
   exit 1
 fi
+if ! command -v "${VALGRIND:-valgrind}" >/dev/null 2>&1; then
+  echo "Assembler CI: '${VALGRIND:-valgrind}' is required for dynamic memory analysis." >&2
+  exit 1
+fi
 
 run_suite() {
   local target="$1"
@@ -64,3 +68,5 @@ for source in "$REPO_DIR"/src/*.c; do
   clang --analyze -Wall -Wextra -Werror -ferror-limit=0 \
     --analyzer-output text -Xanalyzer -analyzer-werror "$source"
 done
+
+bash "$REPO_DIR/.github/scripts/valgrind.sh"

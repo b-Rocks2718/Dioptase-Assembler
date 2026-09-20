@@ -22,5 +22,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Run tests and static analysis
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes valgrind
+      - name: Run tests and analysis
         run: bash .github/scripts/ci.sh

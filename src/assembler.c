@@ -923,6 +923,7 @@ long consume_label_imm(enum ConsumeResult* result){
     } else if (hash_map_contains(local_defines[current_file_index], label)){
       imm = hash_map_get(local_defines[current_file_index], label);
       *result = FOUND;
+      free(label);
       return imm;
     } else {
       print_error();
