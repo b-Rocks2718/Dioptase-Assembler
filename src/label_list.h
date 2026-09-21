@@ -5,14 +5,14 @@
 #include <stdint.h>
 #include <stdio.h>
 
-// The one label entry stores name, is_data, addr.
+// Store a label's owned name, address, and data/text classification.
 struct LabelEntry {
   char* name;
   bool is_data;
   uint32_t addr;
 };
 
-// The label list stores entries, size, capacity.
+// Own the growable array of emitted label entries.
 struct LabelList {
   struct LabelEntry* entries;
   size_t size;

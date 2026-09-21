@@ -21,14 +21,14 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kerne
 
 void set_cli_defines(int count, const char* const* defines);
 
-// Identify the possible consume result values.
+// Classify whether operand parsing found a value, found nothing, or failed.
 enum ConsumeResult {
   ERROR,
   NOT_FOUND,
   FOUND
 };
 
-// Identify the possible user section values.
+// Identify output sections and the implicit kernel section.
 enum UserSection {
   TEXT_SECTION = 0,
   RODATA_SECTION = 1,

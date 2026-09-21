@@ -35,7 +35,7 @@ static void tracked_free(void* ptr) { /* Release memory and record the deallocat
 #undef malloc
 #undef free
 
-int main(void) { /* Exercise preprocessor allocation test behavior. */
+int main(void) { /* Inject every allocation failure point and require complete preprocessor cleanup. */
   const size_t allocation_count = 3;
   int file_names[] = {0, 1};
   const char* argv[] = {"first.s", "second.s"};

@@ -26,7 +26,7 @@ static bool label_entry_matches(const struct LabelEntry* entry, const char* name
   return strncmp(entry->name, name, len) == 0;
 }
 
-// Append an item to label list.
+// Append an owned label unless an identical address/name/class record already exists.
 void label_list_append(struct LabelList* list, const char* name, size_t len, uint32_t addr, bool is_data){
 #ifdef __clang_analyzer__
   // Every list comes from create_label_list, which normalizes zero capacity.
@@ -62,7 +62,7 @@ void destroy_label_list(struct LabelList* list){
   free(list);
 }
 
-// Print label list.
+// Emit data/text label metadata in the assembler debug-file format.
 void fprint_label_list(FILE* ptr, const struct LabelList* list){
   if (list == NULL) return;
   for (size_t i = 0; i < list->size; ++i){

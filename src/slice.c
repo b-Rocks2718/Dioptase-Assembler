@@ -4,7 +4,7 @@
 
 #include "slice.h"
 
-// Compare slice to pointer.
+// Compare a length-delimited slice with an entire NUL-terminated string.
 bool compare_slice_to_pointer(const struct Slice* s, char const *p) {
   for (size_t i = 0; i < s->len; i++) {
     if (p[i] != s->start[i])
@@ -13,7 +13,7 @@ bool compare_slice_to_pointer(const struct Slice* s, char const *p) {
   return p[s->len] == 0;
 }
 
-// Compare slice to slice.
+// Compare two slices for equal length and byte contents.
 bool compare_slice_to_slice(const struct Slice* self, const struct Slice* other) {
   if (self->len != other->len)
     return false;
@@ -43,7 +43,7 @@ void print_slice(struct Slice* slice) {
   }
 }
 
-// Print slice err.
+// Write the slice bytes to stderr without requiring NUL termination.
 void print_slice_err(struct Slice* slice) {
   for (size_t i = 0; i < slice->len; i++) {
     fprintf(stderr, "%c", slice->start[i]);

@@ -40,12 +40,12 @@ void destroy_instruction_array_list(struct InstructionArrayList* list){
   free(list);
 }
 
-// Print instruction array list.
+// Print every instruction array to stdout in assembler hex-image form.
 void print_instruction_array_list(struct InstructionArrayList* list){
   print_instruction_array(list->head);
 }
 
-// Print instruction array list.
+// Write every instruction array to a selected stream, optionally omitting origins.
 void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw){
   fprint_instruction_array(ptr, list->head, raw);
 }
@@ -116,7 +116,7 @@ struct InstructionArray* create_instruction_array(size_t capacity, int origin){
   return arr;
 }
 
-// Append an item to instruction array.
+// Grow the backing storage when needed and append one encoded word.
 void instruction_array_append(struct InstructionArray* arr, int value){
   if (arr->size == arr->capacity){
     arr->instructions = realloc(arr->instructions, arr->capacity * sizeof(int) * 2);
@@ -164,7 +164,7 @@ void destroy_instruction_array(struct InstructionArray* arr){
   free(arr);
 }
 
-// Print instruction array.
+// Print this array and its successors with byte-address origin markers.
 void print_instruction_array(struct InstructionArray* arr){
   printf("@%d\n", arr->origin);
   for (int i = 0; i < arr->size; ++i){
@@ -173,7 +173,7 @@ void print_instruction_array(struct InstructionArray* arr){
   if (arr->next != NULL) print_instruction_array(arr->next);
 }
 
-// Print instruction array.
+// Write this array chain as hex words, with word-address origins for raw images.
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw){
   // raw => no ELF structure => put origin markers
   if (raw) fprintf(ptr, "@%X\n", arr->origin / 4);

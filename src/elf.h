@@ -4,14 +4,14 @@
 #include <stdint.h>
 #include "instruction_array.h"
 
-// The program descriptor stores entry_point, sections, bss_size.
+// Describe assembled sections and the entry point needed for ELF emission.
 struct ProgramDescriptor {
   uint32_t entry_point;
   struct InstructionArrayList* sections;
   uint32_t bss_size;
 };
 
-// The ELF header stores e_ident, e_type, e_machine, e_version, and other fields.
+// Store the fixed ELF header fields in host representation.
 struct ElfHeader {
   unsigned char e_ident[16];
   uint16_t e_type;
@@ -29,7 +29,7 @@ struct ElfHeader {
   uint16_t e_shstrndx;
 };
 
-// The ELF program header stores p_type, p_offset, p_vaddr, p_paddr, and other fields.
+// Store one ELF load-segment descriptor in host representation.
 struct ElfProgramHeader {
   uint32_t p_type;
   uint32_t p_offset;

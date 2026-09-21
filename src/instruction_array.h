@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// The instruction array stores origin, instructions, size, capacity, and other fields.
+// Store words emitted for one origin together with dynamic capacity metadata.
 struct InstructionArray {
   int origin;
   int* instructions;
@@ -15,7 +15,7 @@ struct InstructionArray {
   struct InstructionArray* next;
 };
 
-// The instruction array list stores head, tail.
+// Own the origin-ordered linked list of instruction arrays.
 struct InstructionArrayList {
   struct InstructionArray* head;
   struct InstructionArray* tail;

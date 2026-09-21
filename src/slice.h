@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// The slice stores start, len.
+// View a non-NUL-terminated span of source text without owning it.
 struct Slice {
   char const * start; // where does the string start in memory?
   size_t len;        // How many characters in the string?

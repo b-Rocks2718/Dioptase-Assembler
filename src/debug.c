@@ -29,7 +29,7 @@ struct DebugInfoList* create_debug_info_list(void){
   return list;
 }
 
-// Add debug local.
+// Append an owned local-variable record to the debug stream.
 void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr){
   // create new DebugLocal
   struct DebugLocal* local = malloc(sizeof(struct DebugLocal));
@@ -52,7 +52,7 @@ void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int o
   }
 }
 
-// Add debug line.
+// Append an owned source-line record to the debug stream.
 void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr){
   // create new DebugLine
   struct DebugLine* line = malloc(sizeof(struct DebugLine));
@@ -74,7 +74,7 @@ void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, i
   }
 }
 
-// Print debug info list.
+// Emit local-variable and source-line records in assembler debug format.
 void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list){
   struct DebugEntry* current = debug_list->head;
   while (current != NULL){
