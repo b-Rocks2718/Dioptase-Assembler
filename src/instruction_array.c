@@ -174,13 +174,35 @@ void print_instruction_array(struct InstructionArray* arr){
 }
 
 // Write this array chain as hex words, with word-address origins for raw images.
+// Words are buffered so each instruction is not a separate stdio call.
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw){
-  // raw => no ELF structure => put origin markers
-  if (raw) fprintf(ptr, "@%X\n", arr->origin / 4);
-  for (int i = 0; i < arr->size; ++i){
-    fprintf(ptr, "%08X\n", arr->instructions[i]);
+  enum { kHexChunkBytes = 4096 };
+  char chunk[kHexChunkBytes];
+  size_t used = 0;
+  static const char kHexDigits[] = "0123456789ABCDEF";
+
+  for (; arr != NULL; arr = arr->next) {
+    // raw => no ELF structure => put origin markers
+    if (raw) {
+      if (used > 0) {
+        fwrite(chunk, 1, used, ptr);
+        used = 0;
+      }
+      fprintf(ptr, "@%X\n", arr->origin / 4);
+    }
+    for (size_t i = 0; i < arr->size; ++i) {
+      if (used + 9 > kHexChunkBytes) {
+        fwrite(chunk, 1, used, ptr);
+        used = 0;
+      }
+      uint32_t word = (uint32_t)arr->instructions[i];
+      for (int shift = 28; shift >= 0; shift -= 4) {
+        chunk[used++] = kHexDigits[(word >> shift) & 0xF];
+      }
+      chunk[used++] = '\n';
+    }
   }
-  if (arr->next != NULL) fprint_instruction_array(ptr, arr->next, raw);
+  if (used > 0) fwrite(chunk, 1, used, ptr);
 }
 
 // Return the total number of words in all arrays in the list.

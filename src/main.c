@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +37,18 @@ static char* join_paths(const char* left, const char* right) {
     snprintf(path, total_len, "%s%s", left, right);
   }
   return path;
+}
+
+// Drop source mappings once the preprocessor has copied what it needs.
+// A zero-length file is not mapped, so it is skipped.
+static void unmap_sources(char const** files, const size_t* sizes, int count) {
+  if (files == NULL || sizes == NULL) return;
+  for (int i = 0; i < count; ++i) {
+    if (files[i] != NULL && sizes[i] > 0) {
+      munmap((void*)files[i], sizes[i]);
+      files[i] = NULL;
+    }
+  }
 }
 
 // Free an array of CRT path strings.
@@ -176,7 +189,18 @@ int main(int argc, const char *const *const argv){
     num_files += kCrtFileCount;
   }
 
-  char const** const files = malloc(num_files * sizeof(*files));
+  char const** const files = calloc((size_t)num_files, sizeof(*files));
+  size_t* file_sizes = calloc((size_t)num_files, sizeof(size_t));
+  if (files == NULL || file_sizes == NULL) {
+    fprintf(stderr, "Assembler Error: failed to allocate source file table for %d files\n", num_files);
+    free(files);
+    free(file_sizes);
+    free(file_names);
+    free(cli_defines);
+    free(input_args_alloc);
+    free_crt_paths(crt_paths, kCrtFileCount);
+    return 1;
+  }
 
   for (int i = 0; i < num_files; ++i){
     // open the files
@@ -184,6 +208,7 @@ int main(int argc, const char *const *const argv){
     int fd = open(file_path,O_RDONLY);
     if (fd < 0) {
       fprintf(stderr, "Failed to open source file %s: %s\n", file_path, strerror(errno));
+      unmap_sources(files, file_sizes, i);
       exit(1);
     }
 
@@ -192,8 +217,11 @@ int main(int argc, const char *const *const argv){
     int rc = fstat(fd,&file_stats);
     if (rc != 0) {
       fprintf(stderr, "Failed to stat source file %s: %s\n", file_path, strerror(errno));
+      close(fd);
+      unmap_sources(files, file_sizes, i);
       exit(1);
     }
+    file_sizes[i] = (size_t)file_stats.st_size;
 
     // map the file in my address space
     char const* const src = (char const * const)mmap(
@@ -205,17 +233,26 @@ int main(int argc, const char *const *const argv){
         0);
     if (src == MAP_FAILED) {
       fprintf(stderr, "Failed to map source file %s: %s\n", file_path, strerror(errno));
+      close(fd);
+      unmap_sources(files, file_sizes, i);
       free(file_names);
       free(files);
+      free(file_sizes);
       free(cli_defines);
       free(input_args_alloc);
       free_crt_paths(crt_paths, kCrtFileCount);
       return 1;
     }
+    close(fd);
     files[i] = src;
   }
 
   char** preprocessed = preprocess(num_files, file_names, is_kernel, input_args, files);
+  // The preprocessed buffers own the text assemble() reads, so the source
+  // mappings can be released before the two assembly passes.
+  unmap_sources(files, file_sizes, num_files);
+  free(file_sizes);
+  file_sizes = NULL;
   if (preprocessed == NULL) {
     free(file_names);
     free(files);

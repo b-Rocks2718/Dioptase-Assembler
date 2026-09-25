@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <assert.h>
@@ -7,11 +8,13 @@
 
 // Allocate an empty hash map with the requested bucket count.
 struct HashMap* create_hash_map(size_t num_buckets){
-  struct HashEntry** arr = malloc(num_buckets * sizeof(struct HashEntry*));
+  struct HashEntry** arr = calloc(num_buckets, sizeof(struct HashEntry*));
   struct HashMap* hmap = malloc(sizeof(struct HashMap));
-
-  for (int i = 0; i < num_buckets; ++i){
-    arr[i] = NULL;
+  if (arr == NULL || hmap == NULL) {
+    fprintf(stderr, "Assembler hashmap: failed to allocate %zu buckets\n", num_buckets);
+    free(arr);
+    free(hmap);
+    return NULL;
   }
 
   hmap->size = num_buckets;
@@ -151,7 +154,8 @@ void destroy_hash_entry(struct HashEntry* entry){
 
 // Free every collision chain and the hash map's bucket storage.
 void destroy_hash_map(struct HashMap* hmap){
-  for (int i = 0; i < hmap->size; ++i){
+  if (hmap == NULL) return;
+  for (size_t i = 0; i < hmap->size; ++i){
     if (hmap->arr[i] != NULL) destroy_hash_entry(hmap->arr[i]);
   }
   free(hmap->arr);

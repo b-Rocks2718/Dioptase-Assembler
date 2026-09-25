@@ -2,7 +2,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <ctype.h>
 #include <assert.h>
 #include <string.h>
 
@@ -14,6 +13,33 @@
 #include "preprocessor.h"
 #include "elf.h"
 #include "debug.h"
+#include "keyword.h"
+
+// Assembler source is ASCII. Local predicates avoid the per-call locale lookup
+// inside ctype.h on the lexing hot path.
+static bool ascii_isspace(unsigned char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+static bool ascii_isdigit(unsigned char c) {
+  return c >= '0' && c <= '9';
+}
+
+static bool ascii_isalpha(unsigned char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static bool ascii_isalnum(unsigned char c) {
+  return ascii_isalpha(c) || ascii_isdigit(c);
+}
+
+static bool ascii_isupper(unsigned char c) {
+  return c >= 'A' && c <= 'Z';
+}
+
+static bool ascii_islower(unsigned char c) {
+  return c >= 'a' && c <= 'z';
+}
 
 /*
   Two-pass assembler.
@@ -200,6 +226,27 @@ static void encode_value_bytes(uint32_t value, uint8_t* out, uint32_t count){
   }
 }
 
+// Word slots needed to hold a section measured in bytes during pass 1.
+static size_t section_word_capacity(enum UserSection section) {
+  size_t words = ((size_t)section_sizes[section] + (kWordBytes - 1)) / kWordBytes;
+  if (words == 0) words = 1;
+  return words;
+}
+
+// Grow an instruction array to at least `words` slots. Existing words are kept.
+static bool reserve_instruction_words(struct InstructionArray* arr, size_t words) {
+  if (words < 1) words = 1;
+  if (words <= arr->capacity) return true;
+  int* grown = realloc(arr->instructions, words * sizeof(int));
+  if (grown == NULL) {
+    fprintf(stderr, "Assembler: failed to reserve %zu instruction words\n", words);
+    return false;
+  }
+  arr->instructions = grown;
+  arr->capacity = words;
+  return true;
+}
+
 // Append raw bytes into a section array and advance offsets.
 // section_bases are initialized and aligned.
 static void append_bytes_user(struct InstructionArray* arr, const uint8_t* bytes, uint32_t count,
@@ -313,13 +360,13 @@ static bool ensure_valid_section(const char* context) {
 
 // Return whether c may occur after the first character of an identifier.
 static bool is_identifier_char(char c) {
-  return isalnum((unsigned char)c) || c == '_' || c == '.';
+  return ascii_isalnum((unsigned char)c) || c == '_' || c == '.';
 }
 
 // Return whether a source span is a valid .define name.
 static bool is_valid_define_name(const char* start, size_t len) {
   if (len == 0) return false;
-  if (!isalpha((unsigned char)start[0]) && start[0] != '_') return false;
+  if (!ascii_isalpha((unsigned char)start[0]) && start[0] != '_') return false;
   for (size_t i = 1; i < len; ++i){
     if (!is_identifier_char(start[i])) return false;
   }
@@ -413,8 +460,8 @@ void print_error(void) {
     while (*end != '\0' && *end != '\n') end++;
     
     // remove whitespace at beginning and end
-    while (isspace(*start)) start++;
-    while (isspace(*(end - 1))) end--;
+    while (ascii_isspace((unsigned char)*start)) start++;
+    while (ascii_isspace((unsigned char)*(end - 1))) end--;
 
     // print the line
     struct Slice unrecognized = {start, end - start};
@@ -434,8 +481,8 @@ static void print_warning(const char* message) {
   char const * end = current;
   while (*end != '\0' && *end != '\n') end++;
 
-  while (isspace(*start)) start++;
-  while (end > start && isspace(*(end - 1))) end--;
+  while (ascii_isspace((unsigned char)*start)) start++;
+  while (end > start && ascii_isspace((unsigned char)*(end - 1))) end--;
 
   struct Slice unrecognized = {start, end - start};
   print_slice_err(&unrecognized);
@@ -453,7 +500,7 @@ static struct Slice* clone_slice(const struct Slice* slice) {
 
 // is the rest of the file just whitespace?
 bool is_at_end(void) {
-  while (isspace(*current)) {
+  while (ascii_isspace((unsigned char)*current)) {
     if (*current == '\n') line_count++;
     current += 1;
   }
@@ -463,14 +510,14 @@ bool is_at_end(void) {
 
 // skip whitespace and commas until end of line or non-whitespace character
 void skip(void) {
-  while ((isspace(*current) && *current != '\n') || *current == ',' || *current == ';') {
+  while ((ascii_isspace((unsigned char)*current) && *current != '\n') || *current == ',' || *current == ';') {
     current++;
   }
 }
 
 // skip until we get to a new nonempty line
 void skip_newline(void) {
-  while (isspace(*current)) {
+  while (ascii_isspace((unsigned char)*current)) {
     if (*current == '\n') line_count++;
     current++;
   }
@@ -503,7 +550,7 @@ bool consume(const char* str) {
 
 // Classify characters that can appear inside assembler identifiers
 static bool is_identifier_body_char(char c){
-  return isalnum((unsigned char)c) || c == '_' || c == '.';
+  return ascii_isalnum((unsigned char)c) || c == '_' || c == '.';
 }
 
 // attempt to consume a keyword, has no effect if a match is not found
@@ -522,7 +569,7 @@ bool consume_keyword(const char* str) {
     char const found = current[i];
     if (expected == 0) {
       /* survived to the end of the expected string */
-      if (isspace((unsigned char)found) || found == '\0' ||
+      if (ascii_isspace(found) || found == '\0' ||
           found == ',' || found == ';' || found == ':') {
         // word break
         current += i;
@@ -543,7 +590,7 @@ struct Slice* consume_identifier(void) {
   skip();
   size_t i = 0;
   // identifiers begin with a letter or underscore
-  if (isalpha((unsigned char)current[i]) || current[i] == '_') {
+  if (ascii_isalpha((unsigned char)current[i]) || current[i] == '_') {
     do {
       i += 1;
       // then followed by letters, number, underscores, and periods
@@ -566,10 +613,10 @@ struct Slice* consume_filename(void) {
   size_t i = 0;
   // Debug file names may be relative or absolute and are emitted without
   // quotes. Consume until the next whitespace or statement separator.
-  if (current[i] != '\0' && !isspace(current[i]) && current[i] != ',' && current[i] != ';') {
+  if (current[i] != '\0' && !ascii_isspace((unsigned char)current[i]) && current[i] != ',' && current[i] != ';') {
     do {
       i += 1;
-    } while(current[i] != '\0' && !isspace(current[i]) && current[i] != ',' && current[i] != ';');
+    } while(current[i] != '\0' && !ascii_isspace((unsigned char)current[i]) && current[i] != ',' && current[i] != ';');
 
     struct Slice* slice = malloc(sizeof(struct Slice));
     slice->start = current;
@@ -620,10 +667,10 @@ int consume_register(void) {
   else if (consume_named_register("ra")) return 29;
 
   // registers begin with an r
-  else if (current[0] == 'r' && isdigit((unsigned char)current[1])) {
+  else if (current[0] == 'r' && ascii_isdigit((unsigned char)current[1])) {
     int v = 0;
     size_t i = 1;
-    while(isdigit((unsigned char)current[i])) {
+    while(ascii_isdigit((unsigned char)current[i])) {
       // then followed by numbers
       v = 10 * v + current[i] - '0';
       i += 1;
@@ -640,10 +687,10 @@ int consume_register(void) {
 int consume_control_register(void) {
   skip();
   // registers begin with an r
-  if (current[0] == 'c' && current[1] == 'r' && isdigit((unsigned char)current[2])) {
+  if (current[0] == 'c' && current[1] == 'r' && ascii_isdigit((unsigned char)current[2])) {
     int v = 0;
     size_t i = 2;
-    while(isdigit((unsigned char)current[i])) {
+    while(ascii_isdigit((unsigned char)current[i])) {
       // then followed by numbers
       v = 10 * v + current[i] - '0';
       i += 1;
@@ -684,20 +731,20 @@ long consume_literal(enum ConsumeResult* result) {
   // edge case for zero literal
   // (only time leading 0 is allowed)
   if (*current == '0' && 
-    (isspace(*(current + 1)) || *(current + 1) == '\0'
+    (ascii_isspace((unsigned char)*(current + 1)) || *(current + 1) == '\0'
       || *(current + 1) == ']' || *(current + 1) == '#')){
       *result = FOUND;
       current++;
       return 0;
   }
 
-  if (isdigit(*current) && *current != '0') {
+  if (ascii_isdigit((unsigned char)*current) && *current != '0') {
     // decimal literal
     long v = 0;
     do {
       v = 10*v + ((*current) - '0');
       current += 1;
-    } while (isdigit(*current));
+    } while (ascii_isdigit((unsigned char)*current));
 
     *result = FOUND;
     if (negate) v *= -1;
@@ -707,7 +754,7 @@ long consume_literal(enum ConsumeResult* result) {
     current += 2;
     long v = 0;
     bool saw_digit = false;
-    while (isdigit((unsigned char)*current)) {
+    while (ascii_isdigit((unsigned char)*current)) {
       saw_digit = true;
       if ((*current) - '0' > 1){
         print_error();
@@ -734,7 +781,7 @@ long consume_literal(enum ConsumeResult* result) {
     // octal literal
     long v = 0;
     bool saw_digit = false;
-    while (isdigit((unsigned char)*current)) {
+    while (ascii_isdigit((unsigned char)*current)) {
       saw_digit = true;
       if ((*current) - '7' > 0){
         print_error();
@@ -760,13 +807,13 @@ long consume_literal(enum ConsumeResult* result) {
     long v = 0;
     current += 2;
     bool saw_digit = false;
-    while (isalnum((unsigned char)*current)) {
+    while (ascii_isalnum((unsigned char)*current)) {
       int d;
-      if (isdigit(*current)){
+      if (ascii_isdigit((unsigned char)*current)){
         d = *current - '0';
-      } else if (isupper(*current) && *current <= 'F'){
+      } else if (ascii_isupper((unsigned char)*current) && *current <= 'F'){
         d = *current - 'A' + 10;
-      } else if (islower(*current) && *current <= 'f'){
+      } else if (ascii_islower((unsigned char)*current) && *current <= 'f'){
         d = *current - 'a' + 10;
       } else {
         print_error();
@@ -1959,119 +2006,107 @@ int consume_instruction(enum ConsumeResult* result){
   // user instructions
   skip();
 
-  // alu instructions
-  if (consume_keyword("and")) instruction = consume_alu_op(0, &success);
-  else if (consume_keyword("nand")) instruction = consume_alu_op(1, &success);
-  else if (consume_keyword("or")) instruction = consume_alu_op(2, &success);
-  else if (consume_keyword("nor")) instruction = consume_alu_op(3, &success);
-  else if (consume_keyword("xor")) instruction = consume_alu_op(4, &success);
-  else if (consume_keyword("xnor")) instruction = consume_alu_op(5, &success);
-  else if (consume_keyword("not")) instruction = consume_alu_op(6, &success);
-  else if (consume_keyword("lsl")) instruction = consume_alu_op(7, &success);
-  else if (consume_keyword("lsr")) instruction = consume_alu_op(8, &success);
-  else if (consume_keyword("asr")) instruction = consume_alu_op(9, &success);
-  else if (consume_keyword("rotl")) instruction = consume_alu_op(10, &success);
-  else if (consume_keyword("rotr")) instruction = consume_alu_op(11, &success);
-  else if (consume_keyword("lslc")) instruction = consume_alu_op(12, &success);
-  else if (consume_keyword("lsrc")) instruction = consume_alu_op(13, &success);
-  else if (consume_keyword("add")) instruction = consume_alu_op(14, &success);
-  else if (consume_keyword("addc")) instruction = consume_alu_op(15, &success);
-  else if (consume_keyword("sub")) instruction = consume_alu_op(16, &success);
-  else if (consume_keyword("subb")) instruction = consume_alu_op(17, &success);
-  else if (consume_keyword("cmp")) instruction = consume_cmp(&success);
-  else if (consume_keyword("sxtb")) instruction = consume_alu_op(18, &success);
-  else if (consume_keyword("sxtd")) instruction = consume_alu_op(19, &success);
-  else if (consume_keyword("tncb")) instruction = consume_alu_op(20, &success);
-  else if (consume_keyword("tncd")) instruction = consume_alu_op(21, &success);
-  
-  // load upper immediate
-  else if (consume_keyword("lui")) instruction = consume_lui(&success);
-  
-  // memory instructions
-  else if (consume_keyword("swa")) instruction = consume_mem(0, true, false, &success);
-  else if (consume_keyword("lwa")) instruction = consume_mem(0, true, true, &success);
-  else if (consume_keyword("sw")) instruction = consume_mem(0, false, false, &success);
-  else if (consume_keyword("lw")) instruction = consume_mem(0, false, true, &success);
-  else if (consume_keyword("sda")) instruction = consume_mem(1, true, false, &success);
-  else if (consume_keyword("lda")) instruction = consume_mem(1, true, true, &success);
-  else if (consume_keyword("sd")) instruction = consume_mem(1, false, false, &success);
-  else if (consume_keyword("ld")) instruction = consume_mem(1, false, true, &success);
-  else if (consume_keyword("sba")) instruction = consume_mem(2, true, false, &success);
-  else if (consume_keyword("lba")) instruction = consume_mem(2, true, true, &success);
-  else if (consume_keyword("sb")) instruction = consume_mem(2, false, false, &success);
-  else if (consume_keyword("lb")) instruction = consume_mem(2, false, true, &success);
-  
-  // branch instructions
-  else if (consume_keyword("br")) instruction = consume_branch(0, false, &success);
-  else if (consume_keyword("bz")) instruction = consume_branch(1, false, &success);
-  else if (consume_keyword("bnz")) instruction = consume_branch(2, false, &success);
-  else if (consume_keyword("bs")) instruction = consume_branch(3, false, &success);
-  else if (consume_keyword("bns")) instruction = consume_branch(4, false, &success);
-  else if (consume_keyword("bc")) instruction = consume_branch(5, false, &success);
-  else if (consume_keyword("bnc")) instruction = consume_branch(6, false, &success);
-  else if (consume_keyword("bo")) instruction = consume_branch(7, false, &success);
-  else if (consume_keyword("bno")) instruction = consume_branch(8, false, &success);
-  else if (consume_keyword("bps")) instruction = consume_branch(9, false, &success);
-  else if (consume_keyword("bnps")) instruction = consume_branch(10, false, &success);
-  else if (consume_keyword("bg")) instruction = consume_branch(11, false, &success);
-  else if (consume_keyword("bge")) instruction = consume_branch(12, false, &success);
-  else if (consume_keyword("bl")) instruction = consume_branch(13, false, &success);
-  else if (consume_keyword("ble")) instruction = consume_branch(14, false, &success);
-  else if (consume_keyword("ba")) instruction = consume_branch(15, false, &success);
-  else if (consume_keyword("bae")) instruction = consume_branch(16, false, &success);
-  else if (consume_keyword("bb")) instruction = consume_branch(17, false, &success);
-  else if (consume_keyword("bbe")) instruction = consume_branch(18, false, &success);
-  else if (consume_keyword("bra")) instruction = consume_branch(0, true, &success);
-  else if (consume_keyword("bza")) instruction = consume_branch(1, true, &success);
-  else if (consume_keyword("bnza")) instruction = consume_branch(2, true, &success);
-  else if (consume_keyword("bsa")) instruction = consume_branch(3, true, &success);
-  else if (consume_keyword("bnsa")) instruction = consume_branch(4, true, &success);
-  else if (consume_keyword("bca")) instruction = consume_branch(5, true, &success);
-  else if (consume_keyword("bnca")) instruction = consume_branch(6, true, &success);
-  else if (consume_keyword("boa")) instruction = consume_branch(7, true, &success);
-  else if (consume_keyword("bnoa")) instruction = consume_branch(8, true, &success);
-  else if (consume_keyword("bpa")) instruction = consume_branch(9, true, &success);
-  else if (consume_keyword("bnpa")) instruction = consume_branch(10, true, &success);
-  else if (consume_keyword("bga")) instruction = consume_branch(11, true, &success);
-  else if (consume_keyword("bgea")) instruction = consume_branch(12, true, &success);
-  else if (consume_keyword("bla")) instruction = consume_branch(13, true, &success);
-  else if (consume_keyword("blea")) instruction = consume_branch(14, true, &success);
-  else if (consume_keyword("baa")) instruction = consume_branch(15, true, &success);
-  else if (consume_keyword("baea")) instruction = consume_branch(16, true, &success);
-  else if (consume_keyword("bba")) instruction = consume_branch(17, true, &success);
-  else if (consume_keyword("bbea")) instruction = consume_branch(18, true, &success);
-  else if (consume_keyword("jmp")) instruction = consume_jmp(&success);
+  // One token hash replaces the mnemonic cascade. Prefixes such as "add"/"addc"
+  // stay distinct because the matcher consumes the whole identifier.
+  switch (take_keyword(KW_CLASS_MNEMONIC)) {
+    case KW_AND: instruction = consume_alu_op(0, &success); break;
+    case KW_NAND: instruction = consume_alu_op(1, &success); break;
+    case KW_OR: instruction = consume_alu_op(2, &success); break;
+    case KW_NOR: instruction = consume_alu_op(3, &success); break;
+    case KW_XOR: instruction = consume_alu_op(4, &success); break;
+    case KW_XNOR: instruction = consume_alu_op(5, &success); break;
+    case KW_NOT: instruction = consume_alu_op(6, &success); break;
+    case KW_LSL: instruction = consume_alu_op(7, &success); break;
+    case KW_LSR: instruction = consume_alu_op(8, &success); break;
+    case KW_ASR: instruction = consume_alu_op(9, &success); break;
+    case KW_ROTL: instruction = consume_alu_op(10, &success); break;
+    case KW_ROTR: instruction = consume_alu_op(11, &success); break;
+    case KW_LSLC: instruction = consume_alu_op(12, &success); break;
+    case KW_LSRC: instruction = consume_alu_op(13, &success); break;
+    case KW_ADD: instruction = consume_alu_op(14, &success); break;
+    case KW_ADDC: instruction = consume_alu_op(15, &success); break;
+    case KW_SUB: instruction = consume_alu_op(16, &success); break;
+    case KW_SUBB: instruction = consume_alu_op(17, &success); break;
+    case KW_CMP: instruction = consume_cmp(&success); break;
+    case KW_SXTB: instruction = consume_alu_op(18, &success); break;
+    case KW_SXTD: instruction = consume_alu_op(19, &success); break;
+    case KW_TNCB: instruction = consume_alu_op(20, &success); break;
+    case KW_TNCD: instruction = consume_alu_op(21, &success); break;
+    case KW_LUI: instruction = consume_lui(&success); break;
+    case KW_SWA: instruction = consume_mem(0, true, false, &success); break;
+    case KW_LWA: instruction = consume_mem(0, true, true, &success); break;
+    case KW_SW: instruction = consume_mem(0, false, false, &success); break;
+    case KW_LW: instruction = consume_mem(0, false, true, &success); break;
+    case KW_SDA: instruction = consume_mem(1, true, false, &success); break;
+    case KW_LDA: instruction = consume_mem(1, true, true, &success); break;
+    case KW_SD: instruction = consume_mem(1, false, false, &success); break;
+    case KW_LD: instruction = consume_mem(1, false, true, &success); break;
+    case KW_SBA: instruction = consume_mem(2, true, false, &success); break;
+    case KW_LBA: instruction = consume_mem(2, true, true, &success); break;
+    case KW_SB: instruction = consume_mem(2, false, false, &success); break;
+    case KW_LB: instruction = consume_mem(2, false, true, &success); break;
+    case KW_BR: instruction = consume_branch(0, false, &success); break;
+    case KW_BZ: instruction = consume_branch(1, false, &success); break;
+    case KW_BNZ: instruction = consume_branch(2, false, &success); break;
+    case KW_BS: instruction = consume_branch(3, false, &success); break;
+    case KW_BNS: instruction = consume_branch(4, false, &success); break;
+    case KW_BC: instruction = consume_branch(5, false, &success); break;
+    case KW_BNC: instruction = consume_branch(6, false, &success); break;
+    case KW_BO: instruction = consume_branch(7, false, &success); break;
+    case KW_BNO: instruction = consume_branch(8, false, &success); break;
+    case KW_BPS: instruction = consume_branch(9, false, &success); break;
+    case KW_BNPS: instruction = consume_branch(10, false, &success); break;
+    case KW_BG: instruction = consume_branch(11, false, &success); break;
+    case KW_BGE: instruction = consume_branch(12, false, &success); break;
+    case KW_BL: instruction = consume_branch(13, false, &success); break;
+    case KW_BLE: instruction = consume_branch(14, false, &success); break;
+    case KW_BA: instruction = consume_branch(15, false, &success); break;
+    case KW_BAE: instruction = consume_branch(16, false, &success); break;
+    case KW_BB: instruction = consume_branch(17, false, &success); break;
+    case KW_BBE: instruction = consume_branch(18, false, &success); break;
+    case KW_BRA: instruction = consume_branch(0, true, &success); break;
+    case KW_BZA: instruction = consume_branch(1, true, &success); break;
+    case KW_BNZA: instruction = consume_branch(2, true, &success); break;
+    case KW_BSA: instruction = consume_branch(3, true, &success); break;
+    case KW_BNSA: instruction = consume_branch(4, true, &success); break;
+    case KW_BCA: instruction = consume_branch(5, true, &success); break;
+    case KW_BNCA: instruction = consume_branch(6, true, &success); break;
+    case KW_BOA: instruction = consume_branch(7, true, &success); break;
+    case KW_BNOA: instruction = consume_branch(8, true, &success); break;
+    case KW_BPA: instruction = consume_branch(9, true, &success); break;
+    case KW_BNPA: instruction = consume_branch(10, true, &success); break;
+    case KW_BGA: instruction = consume_branch(11, true, &success); break;
+    case KW_BGEA: instruction = consume_branch(12, true, &success); break;
+    case KW_BLA: instruction = consume_branch(13, true, &success); break;
+    case KW_BLEA: instruction = consume_branch(14, true, &success); break;
+    case KW_BAA: instruction = consume_branch(15, true, &success); break;
+    case KW_BAEA: instruction = consume_branch(16, true, &success); break;
+    case KW_BBA: instruction = consume_branch(17, true, &success); break;
+    case KW_BBEA: instruction = consume_branch(18, true, &success); break;
+    case KW_JMP: instruction = consume_jmp(&success); break;
+    case KW_ADPC: instruction = consume_adpc(&success); break;
+    case KW_TRAP: instruction = consume_trap(&success); break;
+    case KW_FADA: instruction = consume_atomic(true, true, &success); break;
+    case KW_FAD: instruction = consume_atomic(false, true, &success); break;
+    case KW_SWPA: instruction = consume_atomic(true, false, &success); break;
+    case KW_SWP: instruction = consume_atomic(false, false, &success); break;
+    case KW_TLBR: instruction = consume_tlb_op(0, &success); break;
+    case KW_TLBW: instruction = consume_tlb_op(1, &success); break;
+    case KW_TLBI: instruction = consume_tlb_op(2, &success); break;
+    case KW_TLBC: instruction = consume_tlb_op(3, &success); break;
+    case KW_CRMV: instruction = consume_crmv(&success); break;
+    case KW_MODE: instruction = consume_mode_op(&success); break;
+    case KW_RFE: instruction = consume_rfe(&success); break;
+    case KW_IPI: instruction = consume_ipi(&success); break;
+    case KW_EOI: instruction = consume_eoi(&success); break;
+    // hacks to make movi and call work
+    case KW_MOVU: instruction = consume_mov_hack(0, &success); break;
+    case KW_MOVL: instruction = consume_mov_hack(1, &success); break;
+    default: *result = NOT_FOUND; break;
+  }
 
-  // pc-relative to absolute address
-  else if (consume_keyword("adpc")) instruction = consume_adpc(&success);
-  
-  // system calls
-  else if (consume_keyword("trap")) instruction = consume_trap(&success);
-  
-  // atomic instructions
-  else if (consume_keyword("fada")) instruction = consume_atomic(true, true, &success);
-  else if (consume_keyword("fad")) instruction = consume_atomic(false, true, &success);
-  else if (consume_keyword("swpa")) instruction = consume_atomic(true, false, &success);
-  else if (consume_keyword("swp")) instruction = consume_atomic(false, false, &success);
-
-  // privileged instructions
-  else if (consume_keyword("tlbr")) instruction = consume_tlb_op(0, &success);
-  else if (consume_keyword("tlbw")) instruction = consume_tlb_op(1, &success);
-  else if (consume_keyword("tlbi")) instruction = consume_tlb_op(2, &success);
-  else if (consume_keyword("tlbc")) instruction = consume_tlb_op(3, &success);
-  else if (consume_keyword("crmv")) instruction = consume_crmv(&success);
-  else if (consume_keyword("mode")) instruction = consume_mode_op(&success);
-  else if (consume_keyword("rfe")) instruction = consume_rfe(&success);
-  else if (consume_keyword("ipi")) instruction = consume_ipi(&success);
-  else if (consume_keyword("eoi")) instruction = consume_eoi(&success);
-  // hacks to make movi and call work
-  else if (consume_keyword("movu")) instruction = consume_mov_hack(0, &success);
-  else if (consume_keyword("movl")) instruction = consume_mov_hack(1, &success);
-
-  else *result = NOT_FOUND;
-  
   if (!success) *result = ERROR;
-  
+
   return instruction;
 }
 
@@ -2082,9 +2117,31 @@ bool process_labels(char const* const prog){
   current_buffer_start = prog - 1;
   line_count = 1;
 
-  local_labels[current_file_index] = create_hash_map(1000);
-  local_defines[current_file_index] = create_hash_map(1000);
-  local_globals[current_file_index] = create_hash_map(1000);
+  // Bucket counts track source size. Compiler output is roughly one label per
+  // few dozen bytes; .define names and per-file .global sets stay small, so
+  // those tables do not need a thousand empty buckets each.
+  enum {
+    kMinLabelBuckets = 32,
+    kMaxLabelBuckets = 16384,
+    kLabelBytesPerBucket = 48,
+    kSparseSymbolBuckets = 32
+  };
+  size_t src_len = 0;
+  while (prog[src_len] != '\0') src_len++;
+  size_t label_buckets = kMinLabelBuckets;
+  size_t label_need = src_len / kLabelBytesPerBucket;
+  if (label_need < kMinLabelBuckets) label_need = kMinLabelBuckets;
+  if (label_need > kMaxLabelBuckets) label_need = kMaxLabelBuckets;
+  while (label_buckets < label_need) label_buckets *= 2;
+
+  local_labels[current_file_index] = create_hash_map(label_buckets);
+  local_defines[current_file_index] = create_hash_map(kSparseSymbolBuckets);
+  local_globals[current_file_index] = create_hash_map(kSparseSymbolBuckets);
+  if (local_labels[current_file_index] == NULL ||
+      local_defines[current_file_index] == NULL ||
+      local_globals[current_file_index] == NULL) {
+    return false;
+  }
   if (!apply_cli_defines()) return false;
 
   while (!is_at_end()){
@@ -2131,7 +2188,9 @@ bool process_labels(char const* const prog){
 
     } else {
       skip();
-      if (consume_keyword(".global")) {
+      // One lookup classifies the directive. The token stays put when it is not one.
+      enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
+      if ((dir == KW_DIR_GLOBAL)) {
         struct Slice* label = consume_identifier();
         if (label != NULL){
           // Track per-file global declarations to detect duplicate exports.
@@ -2161,7 +2220,7 @@ bool process_labels(char const* const prog){
         }
 
         continue;
-      } else if (consume_keyword(".origin")) { 
+      } else if ((dir == KW_DIR_ORIGIN)) { 
         if (!is_kernel){
           print_error();
           fprintf(stderr, ".origin can only be used in kernel mode\n");
@@ -2196,43 +2255,43 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".text")) {
+      else if ((dir == KW_DIR_TEXT)) {
         current_section = TEXT_SECTION;
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".rodata")) {
+      else if ((dir == KW_DIR_RODATA)) {
         current_section = RODATA_SECTION;
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".data")) {
+      else if ((dir == KW_DIR_DATA)) {
         current_section = DATA_SECTION;
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".bss")) {
+      else if ((dir == KW_DIR_BSS)) {
         current_section = BSS_SECTION;
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".text_load")) {
+      else if ((dir == KW_DIR_TEXT_LOAD)) {
         if (!parse_section_load_directive(TEXT_SECTION, ".text_load")) return false;
         continue;
       }
-      else if (consume_keyword(".rodata_load")) {
+      else if ((dir == KW_DIR_RODATA_LOAD)) {
         if (!parse_section_load_directive(RODATA_SECTION, ".rodata_load")) return false;
         continue;
       }
-      else if (consume_keyword(".data_load")) {
+      else if ((dir == KW_DIR_DATA_LOAD)) {
         if (!parse_section_load_directive(DATA_SECTION, ".data_load")) return false;
         continue;
       }
-      else if (consume_keyword(".bss_load")) {
+      else if ((dir == KW_DIR_BSS_LOAD)) {
         if (!parse_section_load_directive(BSS_SECTION, ".bss_load")) return false;
         continue;
       }
-      else if (consume_keyword(".fill")) {
+      else if ((dir == KW_DIR_FILL)) {
         enum ConsumeResult result; 
         consume_define_or_literal_or_label_abs(&result, ".fill");
         if (result != FOUND){
@@ -2252,7 +2311,7 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".fild")) {
+      else if ((dir == KW_DIR_FILD)) {
         enum ConsumeResult result; 
         consume_define_or_literal(&result, ".fild");
         if (result != FOUND){
@@ -2272,7 +2331,7 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".filb")) {
+      else if ((dir == KW_DIR_FILB)) {
         enum ConsumeResult result; 
         consume_define_or_literal(&result, ".filb");
         if (result != FOUND){
@@ -2292,7 +2351,7 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".space")) { 
+      else if ((dir == KW_DIR_SPACE)) { 
         enum ConsumeResult result; 
         long imm = consume_define_or_literal(&result, ".space");
         if (result != FOUND){
@@ -2307,7 +2366,7 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".align")) {
+      else if ((dir == KW_DIR_ALIGN)) {
         enum ConsumeResult result;
         uint32_t alignment = 0;
         if (!parse_alignment(&result, ".align", &alignment)) return false;
@@ -2317,18 +2376,18 @@ bool process_labels(char const* const prog){
         pc = section_offsets[current_section];
         continue;
       }
-      else if (consume_keyword(".define")) {
+      else if ((dir == KW_DIR_DEFINE)) {
         bool success = true;
         record_define(&success);
         if (!success) return false;
         continue;
       }
-      else if (consume_keyword(".line")) {
+      else if ((dir == KW_DIR_LINE)) {
         // handled in second pass
         skip_line();
         continue;
       }
-      else if (consume_keyword(".local")) {
+      else if ((dir == KW_DIR_LOCAL)) {
         // handled in second pass
         skip_line();
         continue;
@@ -2379,7 +2438,8 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
 
     // directives
-    if (consume_keyword(".global")) {
+    enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
+    if ((dir == KW_DIR_GLOBAL)) {
       // handled in first pass
       struct Slice* name = consume_identifier();
       if (name == NULL){
@@ -2397,10 +2457,10 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       }
       free(name);
     }
-    else if (consume_keyword(".define")){
+    else if ((dir == KW_DIR_DEFINE)){
       skip_line();
     } // handled in first pass
-    else if (consume_keyword(".origin")) { 
+    else if ((dir == KW_DIR_ORIGIN)) { 
       if (is_kernel){
         enum ConsumeResult result;
         long imm = consume_define_or_literal(&result, ".origin");
@@ -2437,35 +2497,35 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
-    else if (consume_keyword(".text")) {
+    else if ((dir == KW_DIR_TEXT)) {
       current_section = TEXT_SECTION;
       pc = section_pc_base(current_section) + section_offsets[current_section];
     }
-    else if (consume_keyword(".rodata")) {
+    else if ((dir == KW_DIR_RODATA)) {
       current_section = RODATA_SECTION;
       pc = section_pc_base(current_section) + section_offsets[current_section];
     }
-    else if (consume_keyword(".data")) {
+    else if ((dir == KW_DIR_DATA)) {
       current_section = DATA_SECTION;
       pc = section_pc_base(current_section) + section_offsets[current_section];
     }
-    else if (consume_keyword(".bss")) {
+    else if ((dir == KW_DIR_BSS)) {
       current_section = BSS_SECTION;
       pc = section_pc_base(current_section) + section_offsets[current_section];
     }
-    else if (consume_keyword(".text_load")) {
+    else if ((dir == KW_DIR_TEXT_LOAD)) {
       if (!parse_section_load_directive(TEXT_SECTION, ".text_load")) return false;
     }
-    else if (consume_keyword(".rodata_load")) {
+    else if ((dir == KW_DIR_RODATA_LOAD)) {
       if (!parse_section_load_directive(RODATA_SECTION, ".rodata_load")) return false;
     }
-    else if (consume_keyword(".data_load")) {
+    else if ((dir == KW_DIR_DATA_LOAD)) {
       if (!parse_section_load_directive(DATA_SECTION, ".data_load")) return false;
     }
-    else if (consume_keyword(".bss_load")) {
+    else if ((dir == KW_DIR_BSS_LOAD)) {
       if (!parse_section_load_directive(BSS_SECTION, ".bss_load")) return false;
     }
-    else if (consume_keyword(".fill")) {
+    else if ((dir == KW_DIR_FILL)) {
       enum ConsumeResult result; 
       long imm = consume_define_or_literal_or_label_abs(&result, ".fill");
       if (result != FOUND){
@@ -2495,7 +2555,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
-    else if (consume_keyword(".fild")) {
+    else if ((dir == KW_DIR_FILD)) {
       enum ConsumeResult result; 
       long imm = consume_define_or_literal(&result, ".fild");
       if (result != FOUND){
@@ -2525,7 +2585,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
-    else if (consume_keyword(".filb")) {
+    else if ((dir == KW_DIR_FILB)) {
       enum ConsumeResult result; 
       long imm = consume_define_or_literal(&result, ".filb");
       if (result != FOUND){
@@ -2553,7 +2613,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
-    else if (consume_keyword(".space")) { 
+    else if ((dir == KW_DIR_SPACE)) { 
       enum ConsumeResult result; 
       long imm = consume_define_or_literal(&result, ".space");
       if (result != FOUND){
@@ -2578,7 +2638,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         return false;
       }
     }
-    else if (consume_keyword(".line")) {
+    else if ((dir == KW_DIR_LINE)) {
       // Parse filename and line number; record the address of the next instruction.
       struct Slice* filename = consume_filename();
       if (filename == NULL){
@@ -2594,10 +2654,12 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         free(filename);
         return false;
       }
-      add_debug_line(debug_info_list, filename, line_num, (uint32_t)pc);
+      if (debug_info_list != NULL) {
+        add_debug_line(debug_info_list, filename, line_num, (uint32_t)pc);
+      }
       free(filename);
     }
-    else if (consume_keyword(".local")) {
+    else if ((dir == KW_DIR_LOCAL)) {
       // Parse name and bp offset; record the address where locals become visible.
       struct Slice* varname = consume_identifier();
       if (varname == NULL){
@@ -2626,10 +2688,12 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
         free(varname);
         return false;
       }
-      add_debug_local(debug_info_list, varname, bp_offset, (size_t)size_value, (uint32_t)pc);
+      if (debug_info_list != NULL) {
+        add_debug_local(debug_info_list, varname, bp_offset, (size_t)size_value, (uint32_t)pc);
+      }
       free(varname);
     }
-    else if (consume_keyword(".align")) {
+    else if ((dir == KW_DIR_ALIGN)) {
       enum ConsumeResult result;
       uint32_t alignment = 0;
       if (!parse_alignment(&result, ".align", &alignment)) return false;
@@ -2713,7 +2777,8 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   for (int i = 0; i < SECTION_COUNT; ++i) section_sizes[i] = 0;
   for (int i = 0; i < SECTION_COUNT; ++i) section_bases[i] = 0;
 
-  debug_info_list = create_debug_info_list();
+  // Source-line records are only retained when the caller asked for -g output.
+  debug_info_list = (labels_out_c != NULL) ? create_debug_info_list() : NULL;
 
   if (labels_out != NULL) *labels_out = NULL;
   if (labels_out_c != NULL) *labels_out_c = NULL;
@@ -2724,8 +2789,17 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   local_defines = malloc(num_files * sizeof(struct HashMap*));
   local_globals = malloc(num_files * sizeof(struct HashMap*));
 
-  // make a hashmap of labels for each file + one global hashmap for global labels
-  global_labels = create_hash_map(1000);
+  // Shared export table. Kernel images export more symbols than any one file.
+  enum { kGlobalSymbolBuckets = 4096 };
+  global_labels = create_hash_map(kGlobalSymbolBuckets);
+  if (global_labels == NULL) {
+    free(local_labels);
+    free(local_defines);
+    free(local_globals);
+    destroy_debug_info_list(debug_info_list);
+    debug_info_list = NULL;
+    return NULL;
+  }
   pc = 0;
   for (int i = 0; i < num_files; ++i){
     current_file_index = i;
@@ -2785,14 +2859,29 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
 
   struct InstructionArrayList* instructions = create_instruction_array_list();
 
+  // Pass 1 already measured each section. Allocate the word buffer once instead
+  // of doubling from a 10-word seed. .bss is not materialized as bytes.
   if (is_kernel){
+    if (!reserve_instruction_words(instructions->head, section_word_capacity(IMPLICIT_SECTION))) {
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
+      free(local_labels);
+      free(local_defines);
+      free(local_globals);
+      destroy_hash_map(global_labels);
+      destroy_instruction_array_list(instructions);
+      destroy_debug_info_list(debug_info_list);
+      debug_info_list = NULL;
+      return NULL;
+    }
     instructions->head->origin = section_bases[IMPLICIT_SECTION];
     section_arrays[IMPLICIT_SECTION] = instructions->head;
-    struct InstructionArray* arr_text = create_instruction_array(10, section_bases[TEXT_SECTION]);
-    struct InstructionArray* arr_rodata = create_instruction_array(10, section_bases[RODATA_SECTION]);
-    struct InstructionArray* arr_data = create_instruction_array(10, section_bases[DATA_SECTION]);
-    struct InstructionArray* arr_bss = create_instruction_array(10, section_bases[BSS_SECTION]);
-    struct InstructionArray* arr_end = create_instruction_array(10, section_bases[END_SECTION]);
+    struct InstructionArray* arr_text = create_instruction_array(section_word_capacity(TEXT_SECTION), section_bases[TEXT_SECTION]);
+    struct InstructionArray* arr_rodata = create_instruction_array(section_word_capacity(RODATA_SECTION), section_bases[RODATA_SECTION]);
+    struct InstructionArray* arr_data = create_instruction_array(section_word_capacity(DATA_SECTION), section_bases[DATA_SECTION]);
+    struct InstructionArray* arr_bss = create_instruction_array(1, section_bases[BSS_SECTION]);
+    struct InstructionArray* arr_end = create_instruction_array(section_word_capacity(END_SECTION), section_bases[END_SECTION]);
     instruction_array_list_append(instructions, arr_text);
     instruction_array_list_append(instructions, arr_rodata);
     instruction_array_list_append(instructions, arr_data);
@@ -2805,9 +2894,22 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
     section_arrays[END_SECTION] = arr_end;
   } else {
     text_instruction_array = instructions->head;
+    if (!reserve_instruction_words(text_instruction_array, section_word_capacity(TEXT_SECTION))) {
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
+      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
+      free(local_labels);
+      free(local_defines);
+      free(local_globals);
+      destroy_hash_map(global_labels);
+      destroy_instruction_array_list(instructions);
+      destroy_debug_info_list(debug_info_list);
+      debug_info_list = NULL;
+      return NULL;
+    }
     text_instruction_array->origin = section_bases[TEXT_SECTION];
-    rodata_instruction_array = create_instruction_array(10, section_bases[RODATA_SECTION]);
-    data_instruction_array = create_instruction_array(10, section_bases[DATA_SECTION]);
+    rodata_instruction_array = create_instruction_array(section_word_capacity(RODATA_SECTION), section_bases[RODATA_SECTION]);
+    data_instruction_array = create_instruction_array(section_word_capacity(DATA_SECTION), section_bases[DATA_SECTION]);
     instruction_array_list_append(instructions, rodata_instruction_array);
     instruction_array_list_append(instructions, data_instruction_array);
     section_arrays[TEXT_SECTION] = text_instruction_array;
