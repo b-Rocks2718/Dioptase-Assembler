@@ -50,8 +50,7 @@ static bool label_index_grow(struct LabelList* list) {
   size_t mask = new_cap - 1;
   for (size_t entry_index = 0; entry_index < list->size; ++entry_index) {
     const struct LabelEntry* entry = &list->entries[entry_index];
-    size_t len = strlen(entry->name);
-    size_t slot = label_key_hash(entry->name, len, entry->addr, entry->is_data) & mask;
+    size_t slot = label_key_hash(entry->name, entry->name_len, entry->addr, entry->is_data) & mask;
     while (next[slot] != SIZE_MAX) slot = (slot + 1) & mask;
     next[slot] = entry_index;
   }
@@ -81,9 +80,8 @@ static bool label_already_present(const struct LabelList* list, const char* name
 static void label_index_insert(struct LabelList* list, size_t entry_index) {
   if (list->index == NULL) return;
   const struct LabelEntry* entry = &list->entries[entry_index];
-  size_t len = strlen(entry->name);
   size_t mask = list->index_cap - 1;
-  size_t slot = label_key_hash(entry->name, len, entry->addr, entry->is_data) & mask;
+  size_t slot = label_key_hash(entry->name, entry->name_len, entry->addr, entry->is_data) & mask;
   while (list->index[slot] != SIZE_MAX) slot = (slot + 1) & mask;
   list->index[slot] = entry_index;
 }
@@ -92,8 +90,8 @@ static void label_index_insert(struct LabelList* list, size_t entry_index) {
 static bool label_entry_matches(const struct LabelEntry* entry, const char* name, size_t len, uint32_t addr, bool is_data){
   if (entry->addr != addr) return false;
   if (entry->is_data != is_data) return false;
-  if (strlen(entry->name) != len) return false;
-  return strncmp(entry->name, name, len) == 0;
+  if (entry->name_len != len) return false;
+  return memcmp(entry->name, name, len) == 0;
 }
 
 // Append an owned label unless an identical address/name/class record already exists.
@@ -119,6 +117,7 @@ void label_list_append(struct LabelList* list, const char* name, size_t len, uin
   name_copy[len] = '\0';
 
   list->entries[list->size].name = name_copy;
+  list->entries[list->size].name_len = len;
   list->entries[list->size].addr = addr;
   list->entries[list->size].is_data = is_data;
   label_index_insert(list, list->size);

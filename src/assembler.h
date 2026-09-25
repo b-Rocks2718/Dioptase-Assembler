@@ -29,7 +29,11 @@ enum ConsumeResult {
 };
 
 // Identify output sections and the implicit kernel section.
+// NO_SECTION marks user-mode code before any .text/.rodata/.data/.bss
+// directive. It is never a valid array index; is_section_in_range rejects it,
+// and every section-indexed access is guarded by ensure_valid_section.
 enum UserSection {
+  NO_SECTION = -1,
   TEXT_SECTION = 0,
   RODATA_SECTION = 1,
   DATA_SECTION = 2,

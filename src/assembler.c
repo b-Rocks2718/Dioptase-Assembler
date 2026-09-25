@@ -53,7 +53,7 @@ unsigned line_count = 1;
 unsigned long pc = 0;
 unsigned entry_point = 0;
 
-enum UserSection current_section = -1;
+enum UserSection current_section = NO_SECTION;
 struct InstructionArray* text_instruction_array = NULL;
 struct InstructionArray* rodata_instruction_array = NULL;
 struct InstructionArray* data_instruction_array = NULL;
@@ -2766,7 +2766,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
 
   is_kernel = kernel;
   pass_number = 1;
-  current_section = is_kernel ? IMPLICIT_SECTION : -1;
+  current_section = is_kernel ? IMPLICIT_SECTION : NO_SECTION;
   text_instruction_array = NULL;
   rodata_instruction_array = NULL;
   data_instruction_array = NULL;
@@ -2918,7 +2918,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   }
 
   reset_section_offsets();
-  current_section = is_kernel ? IMPLICIT_SECTION : -1;
+  current_section = is_kernel ? IMPLICIT_SECTION : NO_SECTION;
   bss_size = 0;
   pc = is_kernel ? section_pc_base(IMPLICIT_SECTION) : section_pc_base(TEXT_SECTION);
   for (int i = 0; i < num_files; ++i){
