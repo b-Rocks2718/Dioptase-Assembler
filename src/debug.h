@@ -41,9 +41,14 @@ struct DebugEntry {
 };
 
 // Own the linked debug-record list and its tail pointer.
+// files holds one owned copy of each distinct .line filename. Line records
+// borrow those slices so a repeated path is not copied once per source line.
 struct DebugInfoList {
   struct DebugEntry* head;    // Head of the debug entries list
   struct DebugEntry* tail;    // Tail of the debug entries list
+  struct Slice** files;
+  size_t nfiles;
+  size_t file_cap;
 };
 
 struct DebugInfoList* create_debug_info_list(void);

@@ -5,6 +5,7 @@
 #include "slice.h"
 #include "preprocessor.h"
 #include "assembler.h"
+#include "keyword.h"
 
 static size_t result_index;
 
@@ -324,19 +325,23 @@ void expand_call(bool* success){
 // Scan the source and expand all recognized assembler pseudo-operations.
 bool expand_macros(void){
   bool success = true;
-  if (consume_keyword("nop")) expand_nop();
-  else if (consume_keyword("ret")) expand_ret();
-  else if (consume_keyword("push")) expand_push(&success);
-  else if (consume_keyword("pop")) expand_pop(&success);
-  else if (consume_keyword("pshw")) expand_push(&success);
-  else if (consume_keyword("popw")) expand_pop(&success);
-  else if (consume_keyword("pshd")) expand_pshd(&success);
-  else if (consume_keyword("popd")) expand_popd(&success);
-  else if (consume_keyword("pshb")) expand_pshb(&success);
-  else if (consume_keyword("popb")) expand_popb(&success);
-  else if (consume_keyword("movi")) expand_movi(&success);
-  else if (consume_keyword("mov")) expand_mov(&success);
-  else if (consume_keyword("call")) expand_call(&success);
+  // take_keyword rejects non-pseudo lead bytes before scanning the token.
+  switch (take_keyword(KW_CLASS_PSEUDO)) {
+    case KW_NOP: expand_nop(); break;
+    case KW_RET: expand_ret(); break;
+    case KW_PUSH:
+    case KW_PSHW: expand_push(&success); break;
+    case KW_POP:
+    case KW_POPW: expand_pop(&success); break;
+    case KW_PSHD: expand_pshd(&success); break;
+    case KW_POPD: expand_popd(&success); break;
+    case KW_PSHB: expand_pshb(&success); break;
+    case KW_POPB: expand_popb(&success); break;
+    case KW_MOVI: expand_movi(&success); break;
+    case KW_MOV: expand_mov(&success); break;
+    case KW_CALL: expand_call(&success); break;
+    default: break;
+  }
 
   if (!success) fprintf(stderr, "Preprocesser macro error\n");
 
@@ -362,8 +367,16 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     line_count = 1;
     pc = is_kernel ? 0 : 0x80000000;
     result_index = 0;
-    capacity = 60;
     current_file = argv[file_names[i]];
+
+    // Size the output from the input so macro expansion does not recopy the
+    // buffer from a 60-byte seed. One extra byte holds the leading NUL the
+    // assembler uses as a sentinel, and another holds the terminating NUL.
+    size_t src_len = 0;
+    while (current[src_len] != '\0') src_len++;
+    enum { kMinPreprocessCapacity = 64 };
+    capacity = src_len + 2;
+    if (capacity < kMinPreprocessCapacity) capacity = kMinPreprocessCapacity;
 
     result = malloc(sizeof(char) * capacity);
     if (result == NULL) {
