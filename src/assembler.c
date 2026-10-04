@@ -14,32 +14,7 @@
 #include "elf.h"
 #include "debug.h"
 #include "keyword.h"
-
-// Assembler source is ASCII. Local predicates avoid the per-call locale lookup
-// inside ctype.h on the lexing hot path.
-static bool ascii_isspace(unsigned char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
-}
-
-static bool ascii_isdigit(unsigned char c) {
-  return c >= '0' && c <= '9';
-}
-
-static bool ascii_isalpha(unsigned char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-static bool ascii_isalnum(unsigned char c) {
-  return ascii_isalpha(c) || ascii_isdigit(c);
-}
-
-static bool ascii_isupper(unsigned char c) {
-  return c >= 'A' && c <= 'Z';
-}
-
-static bool ascii_islower(unsigned char c) {
-  return c >= 'a' && c <= 'z';
-}
+#include "charclass.h"
 
 /*
   Two-pass assembler.
@@ -358,15 +333,10 @@ static bool ensure_valid_section(const char* context) {
   return true;
 }
 
-// Return whether c may occur after the first character of an identifier.
-static bool is_identifier_char(char c) {
-  return ascii_isalnum((unsigned char)c) || c == '_' || c == '.';
-}
-
 // Return whether a source span is a valid .define name.
 static bool is_valid_define_name(const char* start, size_t len) {
   if (len == 0) return false;
-  if (!ascii_isalpha((unsigned char)start[0]) && start[0] != '_') return false;
+  if (!is_identifier_start(start[0])) return false;
   for (size_t i = 1; i < len; ++i){
     if (!is_identifier_char(start[i])) return false;
   }
@@ -426,10 +396,7 @@ static bool apply_cli_defines(void){
       return false;
     }
 
-    struct Slice* label = malloc(sizeof(struct Slice));
-    label->start = def;
-    label->len = name_len;
-    hash_map_insert(local_defines[current_file_index], label, value, true, true);
+    hash_map_insert(local_defines[current_file_index], &name_view, value, true, true);
   }
   return true;
 }
@@ -483,14 +450,6 @@ static void print_warning(const char* message) {
   fprintf(stderr, "%s\n", message);
 }
 
-// Allocate a Slice wrapper for shared source buffers so each map owns its key.
-static struct Slice* clone_slice(const struct Slice* slice) {
-  struct Slice* copy = malloc(sizeof(struct Slice));
-  copy->start = slice->start;
-  copy->len = slice->len;
-  return copy;
-}
-
 // is the rest of the file just whitespace?
 bool is_at_end(void) {
   while (ascii_isspace((unsigned char)*current)) {
@@ -541,18 +500,13 @@ bool consume(const char* str) {
   } 
 }
 
-// Classify characters that can appear inside assembler identifiers
-static bool is_identifier_body_char(char c){
-  return ascii_isalnum((unsigned char)c) || c == '_' || c == '.';
-}
-
 // attempt to consume a keyword, has no effect if a match is not found
 // differs from consume because we ensure token boundaries on both sides
 bool consume_keyword(const char* str) {
   // Whitespace is intentionally left to the caller because preprocessing also
   // uses this matcher.
   if (current != current_buffer_start &&
-      is_identifier_body_char(current[-1])) {
+      is_identifier_char(current[-1])) {
     return false;
   }
 
@@ -579,74 +533,47 @@ bool consume_keyword(const char* str) {
 }
 
 // attempt to consume an identifier, has no effect if a match is not found
-struct Slice* consume_identifier(void) {
+// On success *out views the identifier in the source buffer.
+bool consume_identifier(struct Slice* out) {
   skip();
-  size_t i = 0;
-  // identifiers begin with a letter or underscore
-  if (ascii_isalpha((unsigned char)current[i]) || current[i] == '_') {
-    do {
-      i += 1;
-      // then followed by letters, number, underscores, and periods
-    } while(is_identifier_body_char(current[i]));
+  if (!is_identifier_start(current[0])) return false;
+  // identifiers begin with a letter or underscore, then letters, digits,
+  // underscores, and periods
+  size_t i = 1;
+  while (is_identifier_char(current[i])) i++;
+  out->start = current;
+  out->len = i;
+  current += i;
+  return true;
+}
 
-    struct Slice* slice = malloc(sizeof(struct Slice));
-    slice->start = current;
-    slice->len = i;
-    current += i;
-
-    return slice;
-  } else {
-    return NULL;
-  }
+// Return whether c ends an unquoted .line filename.
+static bool ends_filename(char c) {
+  return c == '\0' || ascii_isspace((unsigned char)c) || c == ',' || c == ';';
 }
 
 // attempt to consume a filename, has no effect if a match is not found
-struct Slice* consume_filename(void) {
+// Debug file names may be relative or absolute and are emitted without
+// quotes. Consume until the next whitespace or statement separator.
+static bool consume_filename(struct Slice* out) {
   skip();
-  size_t i = 0;
-  // Debug file names may be relative or absolute and are emitted without
-  // quotes. Consume until the next whitespace or statement separator.
-  if (current[i] != '\0' && !ascii_isspace((unsigned char)current[i]) && current[i] != ',' && current[i] != ';') {
-    do {
-      i += 1;
-    } while(current[i] != '\0' && !ascii_isspace((unsigned char)current[i]) && current[i] != ',' && current[i] != ';');
-
-    struct Slice* slice = malloc(sizeof(struct Slice));
-    slice->start = current;
-    slice->len = i;
-    current += i;
-
-    return slice;
-  } else {
-    return NULL;
-  }
+  if (ends_filename(current[0])) return false;
+  size_t i = 1;
+  while (!ends_filename(current[i])) i++;
+  out->start = current;
+  out->len = i;
+  current += i;
+  return true;
 }
 
-// Consume an identifier followed by ':' and return its source span.
-struct Slice* consume_label(void){
+// Consume an identifier followed by ':' into *out. On failure nothing is
+// consumed beyond leading separators.
+bool consume_label(struct Slice* out){
   skip();
   char const * old_current = current;
-  struct Slice* label = consume_identifier();
-  if (consume(":")) return label;
+  if (consume_identifier(out) && consume(":")) return true;
 
   // undo side effects
-  if (label != NULL) free(label);
-  current = old_current;
-  return NULL;
-}
-
-// Consume a label without emitting an instruction for it.
-bool skip_label(struct InstructionArrayList* instructions){
-  skip();
-  char const * old_current = current;
-  struct Slice* label = consume_identifier();
-  if (label != NULL && consume(":")) {
-    free(label);
-    return true;
-  }
-
-  // undo side effects
-  if (label != NULL) free(label);
   current = old_current;
   return false;
 }
@@ -710,7 +637,31 @@ int consume_control_register(void) {
   }
 }
 
+// Return the value of c as a hexadecimal digit, or -1.
+static int digit_value(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// Radix prefixes accepted after a leading 0 (either letter case).
+static const struct {
+  char prefix;
+  int radix;
+  const char* name;       // used mid-sentence: "Invalid hex literal"
+  const char* name_cap;   // used to start a sentence: "Hex literal requires..."
+} kRadixPrefixes[] = {
+  {'b', 2, "binary", "Binary"},
+  {'o', 8, "octal", "Octal"},
+  {'x', 16, "hex", "Hex"},
+};
+
 // attempt to consume an integer literal
+// Accepts an optional '-', then decimal (no leading zero), a lone 0, or a
+// 0b/0o/0x prefixed literal. Binary and octal literals run over decimal
+// digits and hex over alphanumerics, so an out-of-range digit is an ERROR
+// rather than the silent end of the literal.
 long consume_literal(enum ConsumeResult* result) {
   skip();
   bool negate = false;
@@ -723,118 +674,59 @@ long consume_literal(enum ConsumeResult* result) {
 
   // edge case for zero literal
   // (only time leading 0 is allowed)
-  if (*current == '0' && 
-    (ascii_isspace((unsigned char)*(current + 1)) || *(current + 1) == '\0'
-      || *(current + 1) == ']' || *(current + 1) == '#')){
-      *result = FOUND;
-      current++;
-      return 0;
+  char next = current[1];
+  if (*current == '0' &&
+      (ascii_isspace((unsigned char)next) || next == '\0' || next == ']' || next == '#')){
+    *result = FOUND;
+    current++;
+    return 0;
   }
 
+  long v = 0;
   if (ascii_isdigit((unsigned char)*current) && *current != '0') {
     // decimal literal
-    long v = 0;
     do {
       v = 10*v + ((*current) - '0');
       current += 1;
     } while (ascii_isdigit((unsigned char)*current));
-
     *result = FOUND;
-    if (negate) v *= -1;
-    return v;
-  } else if (*current == '0' && (*(current + 1) == 'b' || *(current + 1) == 'B')) {
-    // Binary literal
-    current += 2;
-    long v = 0;
-    bool saw_digit = false;
-    while (ascii_isdigit((unsigned char)*current)) {
-      saw_digit = true;
-      if ((*current) - '0' > 1){
-        print_error();
-        fprintf(stderr, "Invalid binary literal\n");
-        *result = ERROR;
-        return 0;
-      }
-      v = 2*v + ((*current) - '0');
-      current += 1;
-    }
-
-    if (!saw_digit){
-      print_error();
-      fprintf(stderr, "Binary literal requires at least one digit\n");
-      *result = ERROR;
-      return 0;
-    }
-
-    *result = FOUND;
-    if (negate) v *= -1;
-    return v;
-  } else if (*current == '0' && (*(current + 1) == 'o' || *(current + 1) == 'O')) {
-    current += 2;
-    // octal literal
-    long v = 0;
-    bool saw_digit = false;
-    while (ascii_isdigit((unsigned char)*current)) {
-      saw_digit = true;
-      if ((*current) - '7' > 0){
-        print_error();
-        fprintf(stderr, "Invalid octal literal\n");
-        *result = ERROR;
-        return 0;
-      }
-      v = 8*v + ((*current) - '0');
-      current += 1;
-    }
-
-    if (!saw_digit){
-      print_error();
-      fprintf(stderr, "Octal literal requires at least one digit\n");
-      *result = ERROR;
-      return 0;
-    }
-
-    *result = FOUND;
-    if (negate) v *= -1;
-    return v;
-  } else if (*current == '0' && (*(current + 1) == 'x' || *(current + 1) == 'X')) {
-    long v = 0;
-    current += 2;
-    bool saw_digit = false;
-    while (ascii_isalnum((unsigned char)*current)) {
-      int d;
-      if (ascii_isdigit((unsigned char)*current)){
-        d = *current - '0';
-      } else if (ascii_isupper((unsigned char)*current) && *current <= 'F'){
-        d = *current - 'A' + 10;
-      } else if (ascii_islower((unsigned char)*current) && *current <= 'f'){
-        d = *current - 'a' + 10;
-      } else {
-        print_error();
-        fprintf(stderr, "Invalid hex literal\n");
-        *result = ERROR;
-        return 0;
-      }
-
-      saw_digit = true;
-      v = 16*v + d;
-      current += 1;
-    }
-
-    if (!saw_digit){
-      print_error();
-      fprintf(stderr, "Hex literal requires at least one digit\n");
-      *result = ERROR;
-      return 0;
-    }
-
-    *result = FOUND;
-    if (negate) v *= -1; 
-    return v;
-  } else {
-    current = old_current;
-    *result = NOT_FOUND;
-    return 0;
+    return negate ? -v : v;
   }
+
+  if (*current == '0') {
+    for (size_t p = 0; p < sizeof(kRadixPrefixes) / sizeof(kRadixPrefixes[0]); ++p) {
+      int radix = kRadixPrefixes[p].radix;
+      if ((next | 0x20) != kRadixPrefixes[p].prefix) continue;  // ASCII lower-case
+
+      current += 2;
+      bool saw_digit = false;
+      while (radix == 16 ? ascii_isalnum((unsigned char)*current)
+                         : ascii_isdigit((unsigned char)*current)) {
+        int d = digit_value(*current);
+        if (d < 0 || d >= radix) {
+          print_error();
+          fprintf(stderr, "Invalid %s literal\n", kRadixPrefixes[p].name);
+          *result = ERROR;
+          return 0;
+        }
+        saw_digit = true;
+        v = radix * v + d;
+        current += 1;
+      }
+      if (!saw_digit) {
+        print_error();
+        fprintf(stderr, "%s literal requires at least one digit\n", kRadixPrefixes[p].name_cap);
+        *result = ERROR;
+        return 0;
+      }
+      *result = FOUND;
+      return negate ? -v : v;
+    }
+  }
+
+  current = old_current;
+  *result = NOT_FOUND;
+  return 0;
 }
 
 // Parse a numeric literal or a .define constant (no labels allowed).
@@ -843,14 +735,14 @@ static long consume_define_or_literal(enum ConsumeResult* result, const char* co
   long imm = consume_literal(result);
   if (*result != NOT_FOUND) return imm;
 
-  struct Slice* name = consume_identifier();
-  if (name == NULL) {
+  struct Slice name;
+  if (!consume_identifier(&name)) {
     *result = NOT_FOUND;
     return 0;
   }
 
-  if (hash_map_contains(local_defines[current_file_index], name)) {
-    imm = hash_map_get(local_defines[current_file_index], name);
+  if (hash_map_contains(local_defines[current_file_index], &name)) {
+    imm = hash_map_get(local_defines[current_file_index], &name);
     *result = FOUND;
   } else {
     print_error();
@@ -859,12 +751,11 @@ static long consume_define_or_literal(enum ConsumeResult* result, const char* co
     } else {
       fprintf(stderr, "Constant \"");
     }
-    print_slice_err(name);
+    print_slice_err(&name);
     fprintf(stderr, "\" has not been defined\n");
     *result = ERROR;
   }
 
-  free(name);
   return imm;
 }
 
@@ -877,32 +768,30 @@ static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
     return imm;
   }
 
-  struct Slice* name = consume_identifier();
-  if (name == NULL) {
+  struct Slice name;
+  if (!consume_identifier(&name)) {
     *result = NOT_FOUND;
     return 0;
   }
 
-  if (hash_map_contains(local_defines[current_file_index], name)) {
-    imm = hash_map_get(local_defines[current_file_index], name);
+  if (hash_map_contains(local_defines[current_file_index], &name)) {
+    imm = hash_map_get(local_defines[current_file_index], &name);
     *result = FOUND;
-    free(name);
     return imm;
   }
 
   // Allow labels in pass 1 without forcing a definition yet.
   if (pass_number == 1) {
     *result = FOUND;
-    free(name);
     return 0;
   }
 
-  if (label_has_definition(local_labels[current_file_index], name)) {
-    imm = hash_map_get(local_labels[current_file_index], name);
+  if (label_has_definition(local_labels[current_file_index], &name)) {
+    imm = hash_map_get(local_labels[current_file_index], &name);
     // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
     *result = FOUND;
-  } else if (label_has_definition(global_labels, name)) {
-    imm = hash_map_get(global_labels, name);
+  } else if (label_has_definition(global_labels, &name)) {
+    imm = hash_map_get(global_labels, &name);
     // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
     *result = FOUND;
   } else {
@@ -912,55 +801,50 @@ static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
     } else {
       fprintf(stderr, "Constant/label \"");
     }
-    print_slice_err(name);
+    print_slice_err(&name);
     fprintf(stderr, "\" has not been defined\n");
     *result = ERROR;
   }
 
-  free(name);
   return imm;
 }
 
 // Consume a label operand and resolve it to an immediate value.
 long consume_label_imm(enum ConsumeResult* result){
-  struct Slice* label = consume_identifier();
-  long imm = 0;
-  if (label != NULL){
-
-    // don't try to decode labels on first pass
-    if (pass_number == 1) {
-      *result = FOUND;
-      free(label);
-      return 0;
-    }
-
-    if (label_has_definition(local_labels[current_file_index], label)){
-      imm = hash_map_get(local_labels[current_file_index], label) - pc - 4;
-
-      // If this label is global in this file, the global entry should match.
-      if (hash_map_contains(local_globals[current_file_index], label) &&
-          label_has_definition(global_labels, label))
-        assert(imm == hash_map_get(global_labels, label) - pc - 4);
-      
-      *result = FOUND;
-    } else if (label_has_definition(global_labels, label)){
-      imm = hash_map_get(global_labels, label) - pc - 4;
-      *result = FOUND;
-    } else if (hash_map_contains(local_defines[current_file_index], label)){
-      imm = hash_map_get(local_defines[current_file_index], label);
-      *result = FOUND;
-      free(label);
-      return imm;
-    } else {
-      print_error();
-      fprintf(stderr, "Label \"");
-      print_slice_err(label);
-      fprintf(stderr, "\" has not been defined\n");
-      *result = ERROR;
-    }
-    free(label);
-  } else {
+  struct Slice label;
+  if (!consume_identifier(&label)){
     *result = NOT_FOUND;
+    return 0;
+  }
+
+  // don't try to decode labels on first pass
+  if (pass_number == 1) {
+    *result = FOUND;
+    return 0;
+  }
+
+  long imm = 0;
+  if (label_has_definition(local_labels[current_file_index], &label)){
+    imm = hash_map_get(local_labels[current_file_index], &label) - pc - 4;
+
+    // If this label is global in this file, the global entry should match.
+    if (hash_map_contains(local_globals[current_file_index], &label) &&
+        label_has_definition(global_labels, &label))
+      assert(imm == hash_map_get(global_labels, &label) - pc - 4);
+
+    *result = FOUND;
+  } else if (label_has_definition(global_labels, &label)){
+    imm = hash_map_get(global_labels, &label) - pc - 4;
+    *result = FOUND;
+  } else if (hash_map_contains(local_defines[current_file_index], &label)){
+    imm = hash_map_get(local_defines[current_file_index], &label);
+    *result = FOUND;
+  } else {
+    print_error();
+    fprintf(stderr, "Label \"");
+    print_slice_err(&label);
+    fprintf(stderr, "\" has not been defined\n");
+    *result = ERROR;
   }
   return imm;
 }
@@ -1275,12 +1159,6 @@ int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
       imm = consume_literal(&result);
       if (result == FOUND){
         // postincrement: [rb], imm
-        if (!is_absolute){
-          print_error();
-          fprintf(stderr, "Postincrement addressing not allowed for relative addressing\n");
-          *success = false;
-          return 0;
-        }
         y = 2;
       } else if (result == NOT_FOUND){
         // no offset: [rb]
@@ -1881,12 +1759,11 @@ int consume_mov_hack(int mov_type, bool* success){
   int imm = consume_label_imm(&result); // don't encode bottom two bits of pc  
   if (result == FOUND) {
     current = old_current;
-    struct Slice* label = consume_identifier();
+    struct Slice label;
+    consume_identifier(&label);
 
     // hack to see if this was a .define and not a label
-    if (!hash_map_contains(local_defines[current_file_index], label)) mov_type |= 2;
-
-    free(label);
+    if (!hash_map_contains(local_defines[current_file_index], &label)) mov_type |= 2;
   }
   else imm = consume_literal(&result);
   if (result != FOUND){
@@ -1935,8 +1812,8 @@ int consume_mov_hack(int mov_type, bool* success){
 
 // Parse and store a .define directive in the current definition map.
 void record_define(bool* success){
-  struct Slice* label = consume_identifier();
-  if (label == NULL){
+  struct Slice label;
+  if (!consume_identifier(&label)){
     // error
     print_error();
     fprintf(stderr, "Expected label\n");
@@ -1947,49 +1824,43 @@ void record_define(bool* success){
   enum ConsumeResult result;
   long imm = consume_literal(&result);
   if (result == NOT_FOUND){
-    struct Slice* value_label = consume_identifier();
-    if (value_label == NULL){
+    struct Slice value_label;
+    if (!consume_identifier(&value_label)){
       print_error();
-      free(label);
       fprintf(stderr, "Expected integer literal or label\n");
       *success = false;
       return;
     }
-    if (hash_map_contains(local_defines[current_file_index], value_label)){
-      imm = hash_map_get(local_defines[current_file_index], value_label);
-    } else if (label_has_definition(local_labels[current_file_index], value_label)){
-      imm = hash_map_get(local_labels[current_file_index], value_label);
-    } else if (label_has_definition(global_labels, value_label)){
-      imm = hash_map_get(global_labels, value_label);
+    if (hash_map_contains(local_defines[current_file_index], &value_label)){
+      imm = hash_map_get(local_defines[current_file_index], &value_label);
+    } else if (label_has_definition(local_labels[current_file_index], &value_label)){
+      imm = hash_map_get(local_labels[current_file_index], &value_label);
+    } else if (label_has_definition(global_labels, &value_label)){
+      imm = hash_map_get(global_labels, &value_label);
     } else {
       print_error();
       fprintf(stderr, "Label \"");
-      print_slice_err(value_label);
+      print_slice_err(&value_label);
       fprintf(stderr, "\" has not been defined\n");
-      free(value_label);
-      free(label);
       *success = false;
       return;
     }
-    free(value_label);
   } else if (result != FOUND){
     // error
     print_error();
-    free(label);
     fprintf(stderr, "Expected integer literal or label\n");
     *success = false;
     return;
   }
 
-  if (hash_map_contains(local_defines[current_file_index], label)){
+  if (hash_map_contains(local_defines[current_file_index], &label)){
     // error
     print_error();
-    free(label);
     fprintf(stderr, "constant has multiple definitions\n");
     *success = false;
     return;
   }
-  hash_map_insert(local_defines[current_file_index], label, imm, true, true);  
+  hash_map_insert(local_defines[current_file_index], &label, imm, true, true);
 }
 
 // consumes a single instruction and converts it to binary or hex
@@ -2140,73 +2011,61 @@ bool process_labels(char const* const prog){
 
   while (!is_at_end()){
 
-    struct Slice* label = consume_label();
-    if (label != NULL) {
-      bool label_was_used = false;
-      if (!ensure_valid_section("label")) {
-        free(label);
-        return false;
-      }
+    struct Slice label;
+    if (consume_label(&label)) {
+      if (!ensure_valid_section("label")) return false;
       long label_value = (long)encode_section_offset(current_section, section_offsets[current_section]);
 
-      // check for duplicates 
-      if (hash_map_contains(local_labels[current_file_index], label)){
-        if (label_has_definition(local_labels[current_file_index], label)){
+      // check for duplicates
+      if (hash_map_contains(local_labels[current_file_index], &label)){
+        if (label_has_definition(local_labels[current_file_index], &label)){
           // duplicate label error
           print_error();
           fprintf(stderr, "Duplicate label\n");
-          free(label);
           return false;
         } else {
-          make_defined(local_labels[current_file_index], label, label_value);
+          make_defined(local_labels[current_file_index], &label, label_value);
         }
       } else {
-        hash_map_insert(local_labels[current_file_index], label, label_value, true, current_section != TEXT_SECTION);
-        label_was_used = true;
+        hash_map_insert(local_labels[current_file_index], &label, label_value, true, current_section != TEXT_SECTION);
       }
 
       // Check for duplicates on globals explicitly declared in this file.
-      if (hash_map_contains(local_globals[current_file_index], label)){
-        if (label_has_definition(global_labels, label)){
+      if (hash_map_contains(local_globals[current_file_index], &label)){
+        if (label_has_definition(global_labels, &label)){
           // duplicate label error
           print_error();
           fprintf(stderr, "Duplicate global label\n");
-          if (!label_was_used) free(label);
           return false;
         } else {
-          make_defined(global_labels, label, label_value);
+          make_defined(global_labels, &label, label_value);
         }
       }
-
-      if (!label_was_used) free(label);
 
     } else {
       skip();
       // One lookup classifies the directive. The token stays put when it is not one.
       enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
       if ((dir == KW_DIR_GLOBAL)) {
-        struct Slice* label = consume_identifier();
-        if (label != NULL){
+        struct Slice label;
+        if (consume_identifier(&label)){
           // Track per-file global declarations to detect duplicate exports.
-          if (!hash_map_contains(local_globals[current_file_index], label)){
-            struct Slice* label_copy = clone_slice(label);
-            hash_map_insert(local_globals[current_file_index], label_copy, 0, false,
+          if (!hash_map_contains(local_globals[current_file_index], &label)){
+            hash_map_insert(local_globals[current_file_index], &label, 0, false,
               current_section != TEXT_SECTION); // mark as data if not in text section
           }
-          if (!hash_map_contains(global_labels, label)){
-            struct Slice* label_copy = clone_slice(label);
-            hash_map_insert(global_labels, label_copy, 0, false, current_section != TEXT_SECTION);
+          if (!hash_map_contains(global_labels, &label)){
+            hash_map_insert(global_labels, &label, 0, false, current_section != TEXT_SECTION);
           }
 
-          if (label_has_definition(local_labels[current_file_index], label)){
-            if (label_has_definition(global_labels, label)){
+          if (label_has_definition(local_labels[current_file_index], &label)){
+            if (label_has_definition(global_labels, &label)){
               print_error();
               fprintf(stderr, "Duplicate global label\n");
               return false;
             }
-            make_defined(global_labels, label, hash_map_get(local_labels[current_file_index], label));
+            make_defined(global_labels, &label, hash_map_get(local_labels[current_file_index], &label));
           }
-          free(label);
         } else {
           print_error();
           fprintf(stderr, ".global directive requires a label\n");
@@ -2422,7 +2281,8 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
 
   while (success == FOUND){
     // consume any labels, they were already dealt with
-    while (skip_newline(), skip_label(instructions));
+    struct Slice defined_label;
+    while (skip_newline(), consume_label(&defined_label));
     skip_newline();
 
     if (pc > ((long)1 << 32)){
@@ -2435,21 +2295,19 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
     if ((dir == KW_DIR_GLOBAL)) {
       // handled in first pass
-      struct Slice* name = consume_identifier();
-      if (name == NULL){
+      struct Slice name;
+      if (!consume_identifier(&name)){
         print_error();
         fprintf(stderr, ".global directive requires a label\n");
         return false;
       }
-      if (!label_has_definition(global_labels, name)){
+      if (!label_has_definition(global_labels, &name)){
         print_error();
         fprintf(stderr, "Global label \"");
-        print_slice_err(name);
+        print_slice_err(&name);
         fprintf(stderr, "\" missing from first pass\n");
-        free(name);
         return false;
       }
-      free(name);
     }
     else if ((dir == KW_DIR_DEFINE)){
       skip_line();
@@ -2634,8 +2492,8 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if ((dir == KW_DIR_LINE)) {
       // Parse filename and line number; record the address of the next instruction.
-      struct Slice* filename = consume_filename();
-      if (filename == NULL){
+      struct Slice filename;
+      if (!consume_filename(&filename)){
         print_error();
         fprintf(stderr, ".line directive requires a filename\n");
         return false;
@@ -2645,18 +2503,16 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       if (result != FOUND){
         print_error();
         fprintf(stderr, ".line directive requires a line number\n");
-        free(filename);
         return false;
       }
       if (debug_info_list != NULL) {
-        add_debug_line(debug_info_list, filename, line_num, (uint32_t)pc);
+        add_debug_line(debug_info_list, &filename, line_num, (uint32_t)pc);
       }
-      free(filename);
     }
     else if ((dir == KW_DIR_LOCAL)) {
       // Parse name and bp offset; record the address where locals become visible.
-      struct Slice* varname = consume_identifier();
-      if (varname == NULL){
+      struct Slice varname;
+      if (!consume_identifier(&varname)){
         print_error();
         fprintf(stderr, ".local directive requires a variable name\n");
         return false;
@@ -2666,26 +2522,22 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
       if (result != FOUND){
         print_error();
         fprintf(stderr, ".local directive requires a bp offset\n");
-        free(varname);
         return false;
       }
       long size_value = consume_literal(&result);
       if (result != FOUND){
         print_error();
         fprintf(stderr, ".local directive requires a size in bytes\n");
-        free(varname);
         return false;
       }
       if (size_value <= 0 || size_value > UINT32_MAX) {
         print_error();
         fprintf(stderr, ".local directive size must be a positive 32-bit value\n");
-        free(varname);
         return false;
       }
       if (debug_info_list != NULL) {
-        add_debug_local(debug_info_list, varname, bp_offset, (size_t)size_value, (uint32_t)pc);
+        add_debug_local(debug_info_list, &varname, bp_offset, (size_t)size_value, (uint32_t)pc);
       }
-      free(varname);
     }
     else if ((dir == KW_DIR_ALIGN)) {
       enum ConsumeResult result;
@@ -2746,7 +2598,7 @@ static void append_labels_from_map(struct HashMap* map, struct LabelList* labels
     while (entry != NULL){
       if (entry->is_defined){
         uint32_t addr = (uint32_t)(entry->value + offset);
-        label_list_append(labels, entry->key->start, entry->key->len, addr, entry->is_data);
+        label_list_append(labels, entry->key.start, entry->key.len, addr, entry->is_data);
       }
       entry = entry->next;
     }

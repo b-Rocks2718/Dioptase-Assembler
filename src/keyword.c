@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "assembler.h"
+#include "charclass.h"
 
 // Longest recognized keyword (.rodata_load). Longer tokens cannot match.
 enum { kMaxKeywordLen = 12 };
@@ -146,23 +147,6 @@ static const struct KwSlot kSlots[kKeywordSlotCount] = {
   [1260] = {"trap", 4, 2, KW_TRAP},
 };
 
-static bool kw_is_alpha(unsigned char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-static bool kw_is_digit(unsigned char c) {
-  return c >= '0' && c <= '9';
-}
-
-static bool kw_is_space(unsigned char c) {
-  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
-}
-
-// Identifier body characters recognized by the assembler lexer.
-static bool kw_is_body(unsigned char c) {
-  return kw_is_alpha(c) || kw_is_digit(c) || c == '_' || c == '.';
-}
-
 static uint32_t kw_hash(const char* text, size_t len) {
   uint32_t hash = 5381;
   for (size_t i = 0; i < len; ++i) {
@@ -172,7 +156,7 @@ static uint32_t kw_hash(const char* text, size_t len) {
 }
 
 enum KeywordId take_keyword(unsigned class_mask) {
-  if (current != current_buffer_start && kw_is_body((unsigned char)current[-1])) {
+  if (current != current_buffer_start && is_identifier_char(current[-1])) {
     return KW_NONE;
   }
 
@@ -185,17 +169,17 @@ enum KeywordId take_keyword(unsigned class_mask) {
     }
   } else if (class_mask == KW_CLASS_DIRECTIVE) {
     if (lead != '.') return KW_NONE;
-  } else if (!(kw_is_alpha(lead) || lead == '_')) {
+  } else if (!is_identifier_start((char)lead)) {
     return KW_NONE;
   }
 
   const char* start = current;
   size_t len = 1;
-  while (kw_is_body((unsigned char)start[len])) len++;
+  while (is_identifier_char(start[len])) len++;
   if (len > kMaxKeywordLen) return KW_NONE;
 
   unsigned char next = (unsigned char)start[len];
-  if (!(kw_is_space(next) || next == '\0' || next == ',' || next == ';' || next == ':')) {
+  if (!(ascii_isspace(next) || next == '\0' || next == ',' || next == ';' || next == ':')) {
     return KW_NONE;
   }
 

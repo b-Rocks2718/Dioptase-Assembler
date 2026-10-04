@@ -40,11 +40,6 @@ void destroy_instruction_array_list(struct InstructionArrayList* list){
   free(list);
 }
 
-// Print every instruction array to stdout in assembler hex-image form.
-void print_instruction_array_list(struct InstructionArrayList* list){
-  print_instruction_array(list->head);
-}
-
 // Write every instruction array to a selected stream, optionally omitting origins.
 void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw){
   fprint_instruction_array(ptr, list->head, raw);
@@ -151,26 +146,14 @@ void instruction_array_append_byte(struct InstructionArray* arr, uint8_t value, 
   set_word_byte(&arr->instructions[arr->size - 1], byte_index, value);
 }
 
-// Read the word containing the requested instruction-array index.
-int instruction_array_get(struct InstructionArray* arr, size_t i){
-  // no checks on i, might regret this later
-  return arr->instructions[i];
-}
-
-// Recursively free an instruction-array node and its successors.
+// Free an instruction-array node and every successor in its chain.
 void destroy_instruction_array(struct InstructionArray* arr){
-  if (arr->next != NULL) destroy_instruction_array(arr->next);
-  free(arr->instructions);
-  free(arr);
-}
-
-// Print this array and its successors with byte-address origin markers.
-void print_instruction_array(struct InstructionArray* arr){
-  printf("@%d\n", arr->origin);
-  for (int i = 0; i < arr->size; ++i){
-    printf("%08X\n", arr->instructions[i]);
+  while (arr != NULL){
+    struct InstructionArray* next = arr->next;
+    free(arr->instructions);
+    free(arr);
+    arr = next;
   }
-  if (arr->next != NULL) print_instruction_array(arr->next);
 }
 
 // Write this array chain as hex words, with word-address origins for raw images.

@@ -1,4 +1,3 @@
-#include <ctype.h>
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -24,30 +23,9 @@ bool compare_slice_to_slice(const struct Slice* self, const struct Slice* other)
   return true;
 }
 
-// Return whether the slice contains a syntactically valid identifier.
-bool is_identifier(const struct Slice* slice) {
-  if (slice->len == 0)
-    return false;
-  if (!isalpha(slice->start[0]))
-    return false;
-  for (size_t i = 1; i < slice->len; i++)
-    if (!isalnum(slice->start[i]))
-      return false;
-  return true;
-}
-
-// Write the slice bytes to stdout without requiring NUL termination.
-void print_slice(struct Slice* slice) {
-  for (size_t i = 0; i < slice->len; i++) {
-    printf("%c", slice->start[i]);
-  }
-}
-
 // Write the slice bytes to stderr without requiring NUL termination.
-void print_slice_err(struct Slice* slice) {
-  for (size_t i = 0; i < slice->len; i++) {
-    fprintf(stderr, "%c", slice->start[i]);
-  }
+void print_slice_err(const struct Slice* slice) {
+  fwrite(slice->start, 1, slice->len, stderr);
 }
 
 // Compute the stable hash used for slice-keyed maps.

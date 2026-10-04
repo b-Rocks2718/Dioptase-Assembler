@@ -14,11 +14,8 @@ bool compare_slice_to_pointer(const struct Slice* s, char const *p);
 
 bool compare_slice_to_slice(const struct Slice* self, const struct Slice* other);
 
-bool is_identifier(const struct Slice* slice);
-
-void print_slice(struct Slice* slice);
-
-void print_slice_err(struct Slice* slice);
+// Write the slice bytes to stderr.
+void print_slice_err(const struct Slice* slice);
 
 size_t hash_slice(const struct Slice* key);
 

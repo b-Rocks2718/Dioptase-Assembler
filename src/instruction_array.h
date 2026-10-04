@@ -27,8 +27,6 @@ void instruction_array_list_append(struct InstructionArrayList* list, struct Ins
 
 void destroy_instruction_array_list(struct InstructionArrayList* list);
 
-void print_instruction_array_list(struct InstructionArrayList* list);
-
 void fprint_instruction_array_list(FILE* ptr, struct InstructionArrayList* list, bool raw);
 
 // Write instruction arrays as raw little-endian bytes.
@@ -50,11 +48,7 @@ void instruction_array_append_double(struct InstructionArray* arr, uint16_t valu
 // Calls are sequential in increasing pc.
 void instruction_array_append_byte(struct InstructionArray* arr, uint8_t value, int pc);
 
-int instruction_array_get(struct InstructionArray* arr, size_t i);
-
 void destroy_instruction_array(struct InstructionArray* arr);
-
-void print_instruction_array(struct InstructionArray* arr);
 
 void fprint_instruction_array(FILE* ptr, struct InstructionArray* arr, bool raw);
 

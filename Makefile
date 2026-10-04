@@ -16,6 +16,8 @@ CFLAGS_DEBUG ?= $(CFLAGS_COMMON) $(OPT_DEBUG) $(DEBUG_INFO)
 CFLAGS_RELEASE ?= $(CFLAGS_COMMON) $(OPT_RELEASE)
 LDFLAGS_DEBUG ?=
 LDFLAGS_RELEASE ?=
+# Emit .d files so editing a header rebuilds every object that includes it.
+DEPFLAGS := -MMD -MP
 
 # Sources and objects
 SRCS      := $(wildcard $(SRC_DIR)/*.c)
@@ -61,10 +63,12 @@ $(RELEASE_EXEC): $(RELEASE_OBJFILES) | dirs-release
 
 # Compile
 $(DEBUG_OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs-debug
-	$(CC) $(CFLAGS_DEBUG) -c $< -o $@
+	$(CC) $(CFLAGS_DEBUG) $(DEPFLAGS) -c $< -o $@
 
 $(RELEASE_OBJ_DIR)/%.o: $(SRC_DIR)/%.c | dirs-release
-	$(CC) $(CFLAGS_RELEASE) -c $< -o $@
+	$(CC) $(CFLAGS_RELEASE) $(DEPFLAGS) -c $< -o $@
+
+-include $(DEBUG_OBJFILES:.o=.d) $(RELEASE_OBJFILES:.o=.d)
 
 # for each test/NAME.s, produce test/NAME.hex
 tests/valid/user/%.hex: tests/valid/user/%.s $(DEBUG_EXEC) | dirs-debug

@@ -133,12 +133,10 @@ static bool expand_movi(void){
   if (c_result == FOUND) {
     return emit("movu r%d, 0x%X; movl r%d, 0x%X", ra, (unsigned)imm, ra, (unsigned)imm);
   }
-  struct Slice* label = consume_identifier();
-  if (label == NULL) return macro_error("Expected immediate\n");
-  bool ok = emit("movu r%d, %.*s; movl r%d, %.*s",
-                 ra, (int)label->len, label->start, ra, (int)label->len, label->start);
-  free(label);
-  return ok;
+  struct Slice label;
+  if (!consume_identifier(&label)) return macro_error("Expected immediate\n");
+  return emit("movu r%d, %.*s; movl r%d, %.*s",
+              ra, (int)label.len, label.start, ra, (int)label.len, label.start);
 }
 
 // Expand mov: general-to-general becomes add with r0; any control register
@@ -164,12 +162,10 @@ static bool expand_call(void){
   if (c_result == FOUND) {
     return emit("movu r29, 0x%X; movl r29, 0x%X; br r29, r29", (unsigned)imm, (unsigned)imm);
   }
-  struct Slice* label = consume_identifier();
-  if (label == NULL) return macro_error("Expected immediate\n");
-  bool ok = emit("movu r29, %.*s; movl r29, %.*s; br r29, r29",
-                 (int)label->len, label->start, (int)label->len, label->start);
-  free(label);
-  return ok;
+  struct Slice label;
+  if (!consume_identifier(&label)) return macro_error("Expected immediate\n");
+  return emit("movu r29, %.*s; movl r29, %.*s; br r29, r29",
+              (int)label.len, label.start, (int)label.len, label.start);
 }
 
 // Expand the pseudo-op at `current`, if any. Returns false on a malformed

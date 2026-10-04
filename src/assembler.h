@@ -1,7 +1,7 @@
 #ifndef ASSEMBLER_H
 #define ASSEMBLER_H
 
-#include "stdbool.h"
+#include <stdbool.h>
 #include "debug.h"
 
 extern char const * current_file;
@@ -65,10 +65,12 @@ bool consume(const char* str);
 // differs from consume because we ensure that there is a whitespace character at the end
 bool consume_keyword(const char* str);
 
-// attempt to consume an identifier, has no effect if a match is not found
-struct Slice* consume_identifier(void);
+// attempt to consume an identifier, has no effect if a match is not found.
+// On success *out views the identifier in the current source buffer.
+bool consume_identifier(struct Slice* out);
 
-struct Slice* consume_label(void);
+// attempt to consume "identifier:", has no effect if a match is not found.
+bool consume_label(struct Slice* out);
 
 // attempt to consume a register
 int consume_register(void);

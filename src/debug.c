@@ -53,51 +53,39 @@ static struct Slice* intern_filename(struct DebugInfoList* debug_list, const str
   return owned;
 }
 
+// Link a new tagged record onto the end of the debug stream.
+static void append_debug_entry(struct DebugInfoList* debug_list, enum DebugInfoType type, union DebugInfo info){
+  struct DebugEntry* entry = malloc(sizeof(struct DebugEntry));
+  entry->type = type;
+  entry->info = info;
+  entry->next = NULL;
+  if (debug_list->head == NULL){
+    debug_list->head = entry;
+  } else {
+    debug_list->tail->next = entry;
+  }
+  debug_list->tail = entry;
+}
+
 // Append an owned local-variable record to the debug stream.
-void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr){
-  // create new DebugLocal
+void add_debug_local(struct DebugInfoList* debug_list, const struct Slice* name, int offset, size_t size, uint32_t addr){
   struct DebugLocal* local = malloc(sizeof(struct DebugLocal));
   local->name = duplicate_slice(name);
   local->offset = offset;
   local->size = size;
   local->addr = addr;
-  // create new DebugEntry
-  struct DebugEntry* entry = malloc(sizeof(struct DebugEntry));
-  entry->type = DEBUG_INFO_LOCALS;
-  entry->info.locals = local;
-  entry->next = NULL;
-  // append to debug_list
-  if (debug_list->head == NULL){
-    debug_list->head = entry;
-    debug_list->tail = entry;
-  } else {
-    debug_list->tail->next = entry;
-    debug_list->tail = entry;
-  }
+  append_debug_entry(debug_list, DEBUG_INFO_LOCALS, (union DebugInfo){.locals = local});
 }
 
-// Append an owned source-line record to the debug stream.
-void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr){
-  // create new DebugLine
+// Append a source-line record whose filename borrows the interned copy.
+void add_debug_line(struct DebugInfoList* debug_list, const struct Slice* file_name, int line_number, uint32_t addr){
   struct Slice* file = intern_filename(debug_list, file_name);
   if (file == NULL) return;
   struct DebugLine* line = malloc(sizeof(struct DebugLine));
   line->file_name = file;
   line->line_number = line_number;
   line->addr = addr;
-  // create new DebugEntry
-  struct DebugEntry* entry = malloc(sizeof(struct DebugEntry));
-  entry->type = DEBUG_INFO_LINES;
-  entry->info.lines = line;
-  entry->next = NULL;
-  // append to debug_list
-  if (debug_list->head == NULL){
-    debug_list->head = entry;
-    debug_list->tail = entry;
-  } else {
-    debug_list->tail->next = entry;
-    debug_list->tail = entry;
-  }
+  append_debug_entry(debug_list, DEBUG_INFO_LINES, (union DebugInfo){.lines = line});
 }
 
 // Emit local-variable and source-line records in assembler debug format.

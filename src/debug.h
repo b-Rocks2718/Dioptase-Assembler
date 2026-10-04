@@ -53,9 +53,11 @@ struct DebugInfoList {
 
 struct DebugInfoList* create_debug_info_list(void);
 
-void add_debug_local(struct DebugInfoList* debug_list, struct Slice* name, int offset, size_t size, uint32_t addr);
+// Record a local variable; the name is copied.
+void add_debug_local(struct DebugInfoList* debug_list, const struct Slice* name, int offset, size_t size, uint32_t addr);
 
-void add_debug_line(struct DebugInfoList* debug_list, struct Slice* file_name, int line_number, uint32_t addr);
+// Record a source line; the filename is interned (copied once per distinct name).
+void add_debug_line(struct DebugInfoList* debug_list, const struct Slice* file_name, int line_number, uint32_t addr);
 
 void fprint_debug_info_list(FILE* fptr, struct DebugInfoList* debug_list);
 
