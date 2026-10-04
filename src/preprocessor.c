@@ -6,6 +6,7 @@
 #include "slice.h"
 #include "preprocessor.h"
 #include "assembler.h"
+#include "lexer.h"
 #include "keyword.h"
 
 /*

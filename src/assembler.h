@@ -3,11 +3,8 @@
 
 #include <stdbool.h>
 #include "debug.h"
+#include "lexer.h"
 
-extern char const * current_file;
-extern char const * current;
-extern char const * current_buffer_start;
-extern unsigned line_count;
 extern unsigned long pc;
 
 // does the file wish to use pivileges instructions?
@@ -20,13 +17,6 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kerne
   struct DebugInfoList** labels_c_out);
 
 void set_cli_defines(int count, const char* const* defines);
-
-// Classify whether operand parsing found a value, found nothing, or failed.
-enum ConsumeResult {
-  ERROR,
-  NOT_FOUND,
-  FOUND
-};
 
 // Identify output sections and the implicit kernel section.
 // NO_SECTION marks user-mode code before any .text/.rodata/.data/.bss
@@ -42,43 +32,6 @@ enum UserSection {
   END_SECTION = 5,
   SECTION_COUNT = 6,
 };
-
-// print line causing an error
-void print_error(void);
-
-// is the rest of the file just whitespace?
-bool is_at_end(void);
-
-// skip whitespace and commas until end of line or non-whitespace character
-void skip(void);
-
-// skip until we get to a new nonempty line
-void skip_newline(void);
-
-// skip an entire line
-void skip_line(void);
-
-// attempt to consume a string, has no effect if a match is not found
-bool consume(const char* str);
-
-// attempt to consume a keyword, has no effect if a match is not found
-// differs from consume because we ensure that there is a whitespace character at the end
-bool consume_keyword(const char* str);
-
-// attempt to consume an identifier, has no effect if a match is not found.
-// On success *out views the identifier in the current source buffer.
-bool consume_identifier(struct Slice* out);
-
-// attempt to consume "identifier:", has no effect if a match is not found.
-bool consume_label(struct Slice* out);
-
-// attempt to consume a register
-int consume_register(void);
-
-int consume_control_register(void);
-
-// attempt to consume an integer literal
-long consume_literal(enum ConsumeResult* result);
 
 // consume a literal immediate or label immediate
 long consume_immediate(enum ConsumeResult* result);

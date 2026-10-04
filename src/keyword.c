@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "assembler.h"
+#include "lexer.h"
 #include "charclass.h"
 
 // Longest recognized keyword (.rodata_load). Longer tokens cannot match.
