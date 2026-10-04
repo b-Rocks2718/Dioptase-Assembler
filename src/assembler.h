@@ -33,10 +33,41 @@ enum UserSection {
   SECTION_COUNT = 6,
 };
 
-// consume a literal immediate or label immediate
-long consume_immediate(enum ConsumeResult* result);
+// Which names an operand may refer to and how labels are valued.
+// Unless OPERAND_LABELS_FIRST is set, .define names shadow labels.
+enum OperandFlags {
+  OPERAND_DEFINES = 1,        // .define / -D constants of the current file
+  OPERAND_LABELS = 2,         // labels of this file, then .global labels
+  OPERAND_PC_RELATIVE = 4,    // labels resolve to label - (pc + 4)
+  OPERAND_DEFER_LABELS = 8,   // in pass 1, any unresolved name is accepted as 0
+  OPERAND_LABELS_FIRST = 16,  // look up labels before .define names
+};
 
-// consumes a single instruction and converts it to binary or hex
-int consume_instruction(enum ConsumeResult* result);
+// Operand rules for instruction immediates and for .fill data words.
+// Instruction immediates check labels before .define names, while every
+// directive checks .define names first; see the note in consume_immediate.
+enum {
+  OPERAND_INSTRUCTION = OPERAND_DEFINES | OPERAND_LABELS | OPERAND_PC_RELATIVE |
+                        OPERAND_DEFER_LABELS | OPERAND_LABELS_FIRST,
+  OPERAND_DATA = OPERAND_DEFINES | OPERAND_LABELS | OPERAND_DEFER_LABELS,
+};
+
+// What a parsed operand turned out to be.
+enum OperandKind {
+  OPERAND_LITERAL,    // integer literal (also reported for a malformed literal)
+  OPERAND_DEFINE,     // .define / -D constant
+  OPERAND_LABEL,      // resolved label
+  OPERAND_DEFERRED,   // name accepted as 0 in pass 1
+  OPERAND_UNDEFINED,  // name that could not be resolved (result is ERROR)
+};
+
+// Parse an integer literal or a name and resolve it according to `flags`.
+// `context` names the directive in undefined-name errors (NULL: instruction).
+long consume_operand(unsigned flags, const char* context, enum ConsumeResult* result,
+                     enum OperandKind* kind_out);
+
+// consume a literal immediate or label immediate (OPERAND_INSTRUCTION rules).
+// kind may be NULL.
+long consume_immediate(enum ConsumeResult* result, enum OperandKind* kind);
 
 #endif  // ASSEMBLER_H

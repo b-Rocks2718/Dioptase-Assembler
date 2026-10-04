@@ -135,6 +135,7 @@ enum KeywordId {
   KW_DIR_DEFINE,
   KW_DIR_LINE,
   KW_DIR_LOCAL,
+  KW_COUNT  // number of ids; sizes per-keyword tables
 };
 
 // If the token at `current` is a keyword in `class_mask`, consume it and return its id.

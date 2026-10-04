@@ -14,6 +14,7 @@
 #include "elf.h"
 #include "debug.h"
 #include "keyword.h"
+#include "encode.h"
 #include "charclass.h"
 
 /*
@@ -102,7 +103,7 @@ static bool is_section_in_range(enum UserSection section){
 }
 
 // Forward declaration for alignment parsing helpers.
-static long consume_define_or_literal(enum ConsumeResult* result, const char* context);
+static long consume_constant(enum ConsumeResult* result, const char* context);
 
 // Check whether a value is a power-of-two alignment.
 // Returns true when value is a nonzero power of two.
@@ -114,7 +115,7 @@ static bool is_power_of_two_u32(uint32_t value){
 // Returns true on success and fills alignment_out.
 static bool parse_alignment(enum ConsumeResult* result, const char* directive,
                             uint32_t* alignment_out){
-  long imm = consume_define_or_literal(result, directive);
+  long imm = consume_constant(result, directive);
   if (*result != FOUND){
     if (*result == NOT_FOUND){
       print_error();
@@ -146,7 +147,7 @@ static bool parse_section_load_directive(enum UserSection section, const char* d
     return false;
   }
   enum ConsumeResult result;
-  long imm = consume_define_or_literal(&result, directive);
+  long imm = consume_constant(&result, directive);
   if (result != FOUND){
     if (result == NOT_FOUND){
       print_error();
@@ -397,1085 +398,102 @@ static bool apply_cli_defines(void){
   return true;
 }
 
-// Parse a numeric literal or a .define constant (no labels allowed).
-// Returns the literal or constant value when FOUND; returns 0 otherwise.
-static long consume_define_or_literal(enum ConsumeResult* result, const char* context) {
-  long imm = consume_literal(result);
-  if (*result != NOT_FOUND) return imm;
-
-  struct Slice name;
-  if (!consume_identifier(&name)) {
-    *result = NOT_FOUND;
-    return 0;
-  }
-
-  if (hash_map_contains(local_defines[current_file_index], &name)) {
-    imm = hash_map_get(local_defines[current_file_index], &name);
-    *result = FOUND;
-  } else {
-    print_error();
-    if (context != NULL) {
-      fprintf(stderr, "%s constant \"", context);
-    } else {
-      fprintf(stderr, "Constant \"");
-    }
-    print_slice_err(&name);
-    fprintf(stderr, "\" has not been defined\n");
-    *result = ERROR;
-  }
-
-  return imm;
+// Look up a .define / -D constant visible in the current file.
+static bool lookup_define(const struct Slice* name, long* value) {
+  struct HashEntry* entry = hash_map_find(local_defines[current_file_index], name);
+  if (entry == NULL) return false;
+  *value = entry->value;
+  return true;
 }
 
-// Parse a numeric literal, .define constant, or label absolute address.
-// Returns the literal, constant, or label address when FOUND; returns 0 otherwise.
-static long consume_define_or_literal_or_label_abs(enum ConsumeResult* result,
-                                                   const char* context) {
-  long imm = consume_literal(result);
-  if (*result != NOT_FOUND) {
-    return imm;
-  }
-
-  struct Slice name;
-  if (!consume_identifier(&name)) {
-    *result = NOT_FOUND;
-    return 0;
-  }
-
-  if (hash_map_contains(local_defines[current_file_index], &name)) {
-    imm = hash_map_get(local_defines[current_file_index], &name);
-    *result = FOUND;
-    return imm;
-  }
-
-  // Allow labels in pass 1 without forcing a definition yet.
-  if (pass_number == 1) {
-    *result = FOUND;
-    return 0;
-  }
-
-  if (label_has_definition(local_labels[current_file_index], &name)) {
-    imm = hash_map_get(local_labels[current_file_index], &name);
-    // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
-    *result = FOUND;
-  } else if (label_has_definition(global_labels, &name)) {
-    imm = hash_map_get(global_labels, &name);
-    // Kernel labels are stored as offsets, so emit absolute addresses for .fill.
-    *result = FOUND;
-  } else {
-    print_error();
-    if (context != NULL) {
-      fprintf(stderr, "%s constant/label \"", context);
-    } else {
-      fprintf(stderr, "Constant/label \"");
-    }
-    print_slice_err(&name);
-    fprintf(stderr, "\" has not been defined\n");
-    *result = ERROR;
-  }
-
-  return imm;
-}
-
-// Consume a label operand and resolve it to an immediate value.
-long consume_label_imm(enum ConsumeResult* result){
-  struct Slice label;
-  if (!consume_identifier(&label)){
-    *result = NOT_FOUND;
-    return 0;
-  }
-
-  // don't try to decode labels on first pass
-  if (pass_number == 1) {
-    *result = FOUND;
-    return 0;
-  }
-
-  long imm = 0;
-  if (label_has_definition(local_labels[current_file_index], &label)){
-    imm = hash_map_get(local_labels[current_file_index], &label) - pc - 4;
-
+// Look up a defined label visible from the current file: this file's labels
+// first, then labels exported with .global by any file. Before layout
+// (pass 1) the value is a packed section offset; afterwards it is absolute.
+static bool lookup_label(const struct Slice* name, long* value) {
+  struct HashMap* locals = local_labels[current_file_index];
+  if (label_has_definition(locals, name)) {
+    *value = hash_map_get(locals, name);
     // If this label is global in this file, the global entry should match.
-    if (hash_map_contains(local_globals[current_file_index], &label) &&
-        label_has_definition(global_labels, &label))
-      assert(imm == hash_map_get(global_labels, &label) - pc - 4);
-
-    *result = FOUND;
-  } else if (label_has_definition(global_labels, &label)){
-    imm = hash_map_get(global_labels, &label) - pc - 4;
-    *result = FOUND;
-  } else if (hash_map_contains(local_defines[current_file_index], &label)){
-    imm = hash_map_get(local_defines[current_file_index], &label);
-    *result = FOUND;
-  } else {
-    print_error();
-    fprintf(stderr, "Label \"");
-    print_slice_err(&label);
-    fprintf(stderr, "\" has not been defined\n");
-    *result = ERROR;
+    assert(!(hash_map_contains(local_globals[current_file_index], name) &&
+             label_has_definition(global_labels, name)) ||
+           hash_map_get(global_labels, name) == *value);
+    return true;
   }
-  return imm;
+  if (label_has_definition(global_labels, name)) {
+    *value = hash_map_get(global_labels, name);
+    return true;
+  }
+  return false;
+}
+
+// Resolve an operand name according to `flags` (see enum OperandFlags).
+// Reports an undefined name. `context` names the directive in that message;
+// NULL selects the instruction wording ("Label ... has not been defined").
+static long resolve_operand_name(const struct Slice* name, unsigned flags, const char* context,
+                                 enum ConsumeResult* result, enum OperandKind* kind) {
+  bool labels = (flags & OPERAND_LABELS) != 0;
+  bool defines_first = (flags & OPERAND_LABELS_FIRST) == 0;
+  long value = 0;
+  *result = FOUND;
+
+  if ((flags & OPERAND_DEFINES) && defines_first && lookup_define(name, &value)) {
+    *kind = OPERAND_DEFINE;
+    return value;
+  }
+  // Labels may be defined later in the file or in a later file, and pass 1
+  // only needs sizes, so any name is accepted as 0 until layout is known.
+  if (labels && (flags & OPERAND_DEFER_LABELS) && pass_number == 1) {
+    *kind = OPERAND_DEFERRED;
+    return 0;
+  }
+  if (labels && lookup_label(name, &value)) {
+    *kind = OPERAND_LABEL;
+    // PC-relative operands are measured from the next instruction (ISA.md).
+    return (flags & OPERAND_PC_RELATIVE) ? value - (long)pc - 4 : value;
+  }
+  if ((flags & OPERAND_DEFINES) && !defines_first && lookup_define(name, &value)) {
+    *kind = OPERAND_DEFINE;
+    return value;
+  }
+
+  print_error();
+  if (context == NULL) {
+    fprintf(stderr, "Label \"");
+  } else {
+    fprintf(stderr, "%s %s \"", context, labels ? "constant/label" : "constant");
+  }
+  print_slice_err(name);
+  fprintf(stderr, "\" has not been defined\n");
+  *kind = OPERAND_UNDEFINED;
+  *result = ERROR;
+  return 0;
+}
+
+// Parse an integer literal or a name and resolve it per `flags`.
+// NOT_FOUND (cursor unchanged) when neither is present. kind_out may be NULL.
+long consume_operand(unsigned flags, const char* context, enum ConsumeResult* result,
+                     enum OperandKind* kind_out) {
+  enum OperandKind kind = OPERAND_LITERAL;
+  long value = consume_literal(result);
+  struct Slice name;
+  if (*result == NOT_FOUND && consume_identifier(&name)) {
+    value = resolve_operand_name(&name, flags, context, result, &kind);
+  }
+  if (kind_out != NULL) *kind_out = kind;
+  return value;
+}
+
+// Parse a literal or .define constant; labels are not allowed.
+static long consume_constant(enum ConsumeResult* result, const char* context) {
+  return consume_operand(OPERAND_DEFINES, context, result, NULL);
 }
 
 // consume a literal immediate or label immediate
-long consume_immediate(enum ConsumeResult* result){
-  long imm = consume_label_imm(result);
-  if (*result == NOT_FOUND){
-    imm = consume_literal(result);
-  }
-  return imm;
-}
-
-// Encode an immediate accepted by the bitwise-immediate instruction form.
-int encode_bitwise_immediate(long imm, bool* success){
-  if (imm == (imm & 0xFF)){
-    return imm;
-  } else if (imm == (imm & 0xFF00)){
-    return (imm >> 8) | (1 << 8);
-  } else if (imm == (imm & 0xFF0000)){
-    return (imm >> 16) | (2 << 8);
-  } else if (imm == (imm & 0xFF000000)){
-    return (imm >> 24) | (3 << 8);
-  } else {
-    *success = false;
-    print_error();
-    fprintf(stderr, "Bitwise instruction immediate must be an 8 bit value, ");
-    fprintf(stderr, "shifted by 0, 8, 16, or 24 bits\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    return 0;
-  }
-}
-
-// Encode an immediate accepted by the shift instruction form.
-int encode_shift_immediate(long imm, bool* success){
-  if (0 <= imm && imm <= 31){
-    return imm;
-  } else {
-    *success = false;
-    print_error();
-    fprintf(stderr, "Shift instruction immediate must be in range 0 to 31\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    return 0;
-  }
-}
-
-// Encode a signed 12-bit arithmetic immediate.
-int encode_arithmetic_immediate(long imm, bool* success){
-  if (-(1 << 11) <= imm && imm < (1 << 11)){
-    return imm & 0xFFF;
-  } else {
-    print_error();
-    fprintf(stderr, "Arithmetic instruction immediate must be in range -2048 to 2047\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// consume an alu instruction and return the corresponding encoding
-int consume_alu_op(int alu_op, bool* success){
-  assert(0 <= alu_op && alu_op < 32); // ensure alu_op is valid
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  // edge case for 'not', 'sxtb', 'sxtd', 'tncb', 'tncd' because they only have 2 parameters
-  int rb = 0;
-  if (alu_op != 6 && alu_op != 18 && alu_op != 19 && alu_op != 20 && alu_op != 21){
-    rb = consume_register();
-    if (rb == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-  }
-  
-  int rc = consume_register();
-  int instruction = 0;
-  if (rc == -1){
-    // and ra, rb, imm
-    enum ConsumeResult result;
-    long imm = consume_immediate(&result);
-    if (result != FOUND){
-      print_error();
-      if (result == NOT_FOUND) fprintf(stderr, "Invalid register or immediate\n");
-      *success = false;
-      return 0;
-    }
-
-    instruction |= 1 << 27; // opcode is 1
-    instruction |= ra << 22;
-    instruction |= rb << 17;
-    instruction |= alu_op << 12;
-    
-    int encoding;
-    if (0 <= alu_op && alu_op < 7){
-      // bitwise op
-      encoding = encode_bitwise_immediate(imm, success);
-    } else if (7 <= alu_op && alu_op < 14) {
-      // shift
-      encoding = encode_shift_immediate(imm, success);
-    } else if (14 <= alu_op && alu_op < 19) {
-      // arithmetic op
-      encoding = encode_arithmetic_immediate(imm, success);
-    } else {
-      // invalid alu op for immediate
-      print_error();
-      fprintf(stderr, "ALU operation %d does not support immediate values\n", alu_op);
-      *success = false;
-      return 0;
-    }
-
-    assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
-
-    instruction |= encoding;
-  } else {
-    // and ra, rb, rc
-    instruction |= ra << 22;
-    instruction |= rb << 17;
-    instruction |= rc;
-    instruction |= alu_op << 5;
-  }
-  
-  return instruction; 
-}
-
-// Parse a compare instruction and return its encoded word.
-int consume_cmp(bool* success){
-  int rb = consume_register();
-  if (rb == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-  
-  int rc = consume_register();
-  int instruction = 0;
-  if (rc == -1){
-    // and ra, rb, imm
-    enum ConsumeResult result;
-    long imm = consume_immediate(&result);
-    if (result != FOUND){
-      print_error();
-      if (result == NOT_FOUND) fprintf(stderr, "Invalid register or immediate\n");
-      *success = false;
-      return 0;
-    }
-
-    instruction |= 1 << 27; // opcode is 1
-    instruction |= rb << 17;
-    instruction |= 16 << 12; // alu_op
-    
-    int encoding = encode_arithmetic_immediate(imm, success);
-
-    assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
-
-    instruction |= encoding;
-  } else {
-    instruction |= rb << 17;
-    instruction |= rc;
-    instruction |= 16 << 5; // alu_op
-  }
-  
-  return instruction; 
-}
-
-// Encode the aligned immediate field required by LUI.
-int encode_lui_immediate(long imm, bool* success){
-  if ((imm & 0x3FF) == 0 && imm < ((long)1 << 32)){
-    return ((int)imm >> 10) & 0x3FFFFF;
-  } else {
-    *success = false;
-    print_error();
-    fprintf(stderr, "lui immediate must be a 32 bit integer with zero for bottom 10 bits\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    return 0;
-  }
-}
-
-// Parse a LUI instruction and return its encoded word.
-int consume_lui(bool* success){
-  enum ConsumeResult result;
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  long imm = consume_immediate(&result);
-  if (result != FOUND){
-    print_error();
-    if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
-    *success = false;
-    return 0;
-  }
-
-  int encoding = encode_lui_immediate(imm, success);
-
-  assert(encoding == (encoding & 0x3FFFFF)); // ensure immediate fits in 22 bits
-
-  int instruction = 2 << 27;
-  instruction |= ra << 22;
-  instruction |= encoding;
-  return instruction;
-}
-
-// Encode an absolute memory address in the instruction's split immediate fields.
-int encode_absolute_memory_immediate(long imm, bool* success){
-  // top n bits must all be 0s or all be 1s
-  // bottom m bits must be 0s
-  // the 12 bits in the middle become part of the instruction
-  if (imm == (imm & 0x7FF) || ~imm == (~imm & 0x7FF)){
-    return imm & 0xFFF;
-  } else if ((imm == (imm & 0xFFF) || ~imm == (~imm & 0xFFF)) && ((imm & 1) == 0)){
-    return ((imm >> 1) & 0xFFF)| (1 << 12);
-  } else if ((imm == (imm & 0x1FFF) || ~imm == (~imm & 0x1FFF)) && ((imm & 3) == 0)){
-    return ((imm >> 2) & 0xFFF) | (2 << 12);
-  } else if ((imm == (imm & 0x3FFF) || ~imm == (~imm & 0x3FFF)) && ((imm & 7) == 0)){
-    return ((imm >> 3) & 0xFFF) | (3 << 12);
-  } else {
-    // can't encode
-    print_error();
-    fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must be a 12 bit number shifted by 0, 1, 2, or 3\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// Encode a signed 16-bit memory offset.
-int encode_relative_memory_immediate(long imm, bool* success){
-  if (-(1L << 15) <= imm && imm < (1L << 15)){
-    return (int)imm & 0xFFFF;
-  } else {
-    // can't encode
-    print_error();
-    fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in signed 16 bits (-32768 to 32767)\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// Encode the wider relative offset used by long memory instructions.
-int encode_long_relative_memory_immediate(long imm, bool* success){
-  if (-(1L << 20) <= imm && imm < (1L << 20)){
-    return (int)imm & 0x1FFFFF;
-  } else {
-    // can't encode
-    print_error();
-    fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in signed 21 bits (-1048576 to 1048575)\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// Parse a memory instruction, including its addressing mode and width.
-int consume_mem(int width_type, bool is_absolute, bool is_load, bool* success){
-  int instruction = 0;
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  if (!consume("[")){
-    *success = false;
-    print_error();
-    fprintf(stderr, "Expected \"[\" in memory instruction\n");
-    return 0;
-  }
-
-  int rb = consume_register();
-  if (rb == -1){
-    if (is_absolute){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-  }
-
-  long imm = 0;
-  int y = 0; // absolute addressing mode selector: 0=offset, 1=preinc, 2=postinc
-
-  if (consume("]")){
-    if (is_absolute){
-      enum ConsumeResult result;
-      imm = consume_literal(&result);
-      if (result == FOUND){
-        // postincrement: [rb], imm
-        y = 2;
-      } else if (result == NOT_FOUND){
-        // no offset: [rb]
-        imm = 0;
-        y = 0;
-      } else {
-        // error
-        *success = false;
-        return 0;
-      }
-    }
-  } else {
-    enum ConsumeResult result;
-    imm = consume_immediate(&result);
-    if (result == FOUND){
-      if (!consume("]")){
-        print_error();
-        fprintf(stderr, "Expected \"]\" in memory instruction\n");
-        *success = false;
-        return 0;
-      }
-      if (consume("!")){
-        // preincrement: [rb, imm]!
-        if (!is_absolute){
-          print_error();
-          fprintf(stderr, "Preincrement addressing not allowed for relative addressing\n");
-          *success = false;
-          return 0;
-        }
-        y = 1;
-      } else {
-        // signed offset: [rb, imm]
-        y = 0;
-      }
-    } else {
-      // error
-      print_error();
-      fprintf(stderr, "Invalid immediate in memory instruction\n");
-      *success = false;
-      return 0;
-    }
-  }
-  int encoding;
-  
-  if (is_absolute) encoding = encode_absolute_memory_immediate(imm, success);
-  else if (rb != -1) encoding = encode_relative_memory_immediate(imm, success);
-  else encoding = encode_long_relative_memory_immediate(imm, success);
-
-  // opcode
-  if (is_absolute){
-    instruction |= (3 + 3 * width_type) << 27;
-  } else if (rb != -1) {
-    instruction |= (4 + 3 * width_type) << 27;
-  } else {
-    instruction |= (5 + 3 * width_type) << 27;
-  }
-
-  if (is_load){
-    if (rb != -1) instruction |= 1 << 16;
-    else instruction |= 1 << 21;
-  }
-
-  instruction |= ra << 22;
-  
-  if (is_absolute){
-    instruction |= y << 14;
-    instruction |= rb << 17;
-    assert(encoding == (encoding & 0x3FFF)); // ensure encoding is 14 bits
-  } else if (rb != -1) {
-    assert(encoding == (encoding & 0xFFFF)); // ensure encoding is 16 bits
-    instruction |= rb << 17;
-  } else {
-    assert(encoding == (encoding & 0x1FFFFF)); // ensure encoding is 21 bits
-  }
-
-  instruction |= encoding;
-
-  return instruction;
-}
-
-// Encode a signed branch displacement.
-int encode_branch_immediate(long imm, bool* success){
-  if (-(1 << 23) <= imm && imm < (1 << 23) && (imm & 3) == 0){
-    return (imm >> 2) & 0x3FFFFF;
-  } else {
-    *success = false;
-    print_error();
-    fprintf(stderr, "branch immediate must be divisible by 4 and in range -8388608 to 8388607\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    return 0;
-  }
-}
-
-// Encode the displacement used by ADPC.
-int encode_adpc_immediate(long imm, bool* success){
-  if (-(1L << 21) <= imm && imm < (1L << 21)){
-    return (int)imm & 0x3FFFFF;
-  } else {
-    *success = false;
-    print_error();
-    fprintf(stderr, "adpc immediate must fit in signed 22 bits (-2097152 to 2097151)\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    return 0;
-  }
-}
-
-// Parse a conditional branch and return its encoded word.
-int consume_branch(int branch_code, bool is_absolute, bool* success){
-  int instruction = 0;
-
-  assert(0 <= branch_code && branch_code < 19); // ensure branch code is valid
-
-  int ra = consume_register();
-  if (ra == -1){
-    // it's an immediate branch
-    enum ConsumeResult result;
-    long imm = consume_immediate(&result);
-    if (result != FOUND){
-      print_error();
-      if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
-      *success = false;
-      return 0;
-    }
-    if (is_absolute){
-      print_error();
-      fprintf(stderr, "Immediate branch is not allowed for absolute branches\n");
-      *success = false;
-      return 0;
-    }
-    int encoding = encode_branch_immediate(imm, success);
-    instruction |= 12 << 27; // opcode
-    instruction |= branch_code << 22;
-    instruction |= encoding;
-  } else {
-    // register branch
-    int rb = consume_register();
-    if (rb == -1){
-      // ra was omitted
-      rb = ra;
-      ra = 0;
-    }
-    if (is_absolute) instruction |= 13 << 27; // opcode
-    else instruction |= 14 << 27; // opcode
-    instruction |= branch_code << 22;
-    instruction |= ra << 5;
-    instruction |= rb;
-  }
-
-  return instruction;
-}
-
-// Parse an ADPC instruction and return its encoded word.
-int consume_adpc(bool* success){
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  enum ConsumeResult result;
-  long imm = consume_immediate(&result);
-  if (result != FOUND){
-    print_error();
-    if (result == NOT_FOUND) fprintf(stderr, "adpc expects immediate or label\n");
-    *success = false;
-    return 0;
-  }
-
-  int encoding = encode_adpc_immediate(imm, success);
-  int instruction = 0;
-  instruction |= 22 << 27;
-  instruction |= ra << 22;
-  instruction |= encoding;
-  return instruction;
-}
-
-// Alias for unconditional branches
-int consume_jmp(bool* success){
-  int instruction = 0;
-
-  int ra = consume_register();
-  if (ra == -1){
-    // it's an immediate branch
-    enum ConsumeResult result;
-    long imm = consume_immediate(&result);
-    if (result != FOUND){
-      print_error();
-      if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
-      *success = false;
-      return 0;
-    }
-    
-    int encoding = encode_branch_immediate(imm, success);
-    instruction |= 12 << 27; // opcode
-    instruction |= encoding;
-  } else {
-    // register branch
-    instruction |= 13 << 27; // opcode
-    instruction |= ra;
-  }
-
-  return instruction;
-}
-
-// Parse a trap instruction and return its encoded word.
-int consume_trap(bool* success){
-  (void)success;
-  return 15 << 27;
-}
-
-// Encode the short immediate form accepted by an atomic instruction.
-int encode_short_atomic_immediate(long imm, bool* success){
-  if (-(1L << 11) <= imm && imm < (1L << 11)){
-    return (int)imm & 0xFFF;
-  } else {
-    // can't encode
-    print_error();
-    fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in signed 12 bits (-2048 to 2047)\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// Encode the long immediate form accepted by an atomic instruction.
-int encode_long_atomic_immediate(long imm, bool* success){
-  if (-(1L << 16) <= imm && imm < (1L << 16)){
-    return (int)imm & 0x1FFFF;
-  } else {
-    // can't encode
-    print_error();
-    fprintf(stderr, "Invalid immediate for memory instruction\n");
-    fprintf(stderr, "Immediate must fit in signed 17 bits (-65536 to 65535)\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-}
-
-// Parse an atomic instruction and return its encoded word.
-int consume_atomic(bool is_absolute, bool is_fadd, bool* success){
-  int instruction = 0;
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  int rc = consume_register();
-  if (rc == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  if (!consume("[")){
-    *success = false;
-    print_error();
-    fprintf(stderr, "Expected \"[\" in memory instruction\n");
-    return 0;
-  }
-
-  int rb = consume_register();
-  if (rb == -1){
-    if (is_absolute){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-  }
-
-  long imm = 0;
-
-  if (consume("]")){
-    // no offset
-    imm = 0;
-  } else {
-    // signed offset
-    enum ConsumeResult result;
-    imm = consume_immediate(&result);
-    if (result == FOUND){
-      if (!consume("]")){
-        print_error();
-        fprintf(stderr, "Expected \"]\" in memory instruction\n");
-        *success = false;
-        return 0;
-      }
-    } else {
-      // error
-      print_error();
-      fprintf(stderr, "Invalid immediate in memory instruction\n");
-      *success = false;
-      return 0;
-    }
-  }
-  int encoding;
-  
-  if (is_absolute) encoding = encode_short_atomic_immediate(imm, success);
-  else if (rb != -1) encoding = encode_short_atomic_immediate(imm, success);
-  else encoding = encode_long_atomic_immediate(imm, success);
-
-  // opcode
-  if (is_absolute){
-    instruction |= (is_fadd ? 16 : 19) << 27;
-  } else if (rb != -1) {
-    instruction |= (is_fadd ? 17 : 20) << 27;
-  } else {
-    instruction |= (is_fadd ? 18 : 21) << 27;
-  }
-
-  instruction |= ra << 22;
-  instruction |= rc << 17;
-  
-  if (is_absolute){
-    assert(encoding == (encoding & 0xFFF)); // ensure encoding is 12 bits
-    instruction |= rb << 12;
-  } else if (rb != -1) {
-    assert(encoding == (encoding & 0xFFF)); // ensure encoding is 12 bits
-    instruction |= rb << 12;
-  } else {
-    assert(encoding == (encoding & 0x1FFFF)); // ensure encoding is 17 bits
-  }
-
-  instruction |= encoding;
-
-  return instruction;
-}
-
-// Reject an instruction unavailable in the current privilege mode.
-void check_privileges(bool* success){
-  static bool has_printed = false;
-  // Privileged instructions require -kernel flag
-  if (!is_kernel){
-    *success = false;
-    if (!has_printed){
-      has_printed = true;
-      print_error();
-      fprintf(stderr, "Used privileged instruction\n");
-      fprintf(stderr, "Run assembler with -kernel if this was intentional\n");
-    }
-  }
-}
-
-// Parse a TLB-management instruction and return its encoded word.
-int consume_tlb_op(int tlb_op, bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  assert(0 <= tlb_op && tlb_op < 4); // ensure tlb op is valid
-
-  int instruction = 31 << 27; // opcode
-
-  if (tlb_op == 3){
-    // tlbc
-    instruction |= 3 << 10;
-  } else if (tlb_op == 2){
-    // tlbi
-    instruction |= 2 << 10;
-
-    int rb = consume_register();
-    if (rb == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-
-    instruction |= rb << 17;
-
-  } else {
-    // tlbr or tlbw
-    int ra = consume_register();
-    if (ra == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-    int rb = consume_register();
-    if (rb == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return 0;
-    }
-
-    instruction |= ra << 22;
-    instruction |= rb << 17;
-
-    if (tlb_op == 1){
-      instruction |= 1 << 10;
-    }
-  }
-
-  return instruction;
-}
-
-// Parse a control-register move instruction and return its encoded word.
-int consume_crmv(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27;
-  instruction |= 1 << 12;
-
-  int ra = consume_register();
-  int rb;
-  if (ra == -1){
-    ra = consume_control_register();
-    if (ra == -1){
-      print_error();
-      fprintf(stderr, "Invalid register or control register\n");
-      *success = false;
-      return 0; 
-    }
-    rb = consume_control_register();
-    if (rb == -1) {
-      rb = consume_register();
-      if (rb == -1){
-        print_error();
-        fprintf(stderr, "Invalid control register\n");
-        *success = false;
-        return 0; 
-      }
-      // crmv crA, rB
-      instruction |= 4 << 10;
-    } else {
-      // crmv crA, crB
-      instruction |= 6 << 10;
-    }
-  } else {
-    rb = consume_control_register();
-    if (rb == -1) {
-      rb = consume_register();
-      if (rb == -1){
-        print_error();
-        fprintf(stderr, "Invalid register or control register\n");
-        *success = false;
-        return 0; 
-      }
-      // crmv rA, rB
-      instruction |= 7 << 10;
-    } else {
-      // crmv rA, crB
-      instruction |= 5 << 10;
-    }
-  }
-  instruction |= ra << 22;
-  instruction |= rb << 17;
-
-  return instruction;
-}
-
-// Parse an end-of-interrupt instruction.
-int consume_eoi(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27; // opcode
-  instruction |= 5 << 12; // privileged ID for eoi
-
-  skip();
-  if (consume_keyword("all")) {
-    instruction |= 1 << 11;
-    return instruction;
-  }
-
-  enum ConsumeResult result;
-  long imm = consume_immediate(&result);
-  if (result != FOUND) {
-    print_error();
-    fprintf(stderr, "eoi instruction expects 'all' or an ISR bit index in range 0 to 15\n");
-    *success = false;
-    return 0;
-  }
-  if (imm < 0 || imm > 15) {
-    print_error();
-    fprintf(stderr, "eoi bit index must be in range 0 to 15\n");
-    fprintf(stderr, "Got %ld\n", imm);
-    *success = false;
-    return 0;
-  }
-
-  instruction |= imm & 0xF;
-  return instruction;
-}
-
-// Parse an instruction that changes processor mode state.
-int consume_mode_op(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27; // opcode
-  instruction |= 2 << 12;
-
-  if (consume("run"));
-  else if (consume("sleep")){
-    instruction |= 1 << 10;
-  } else if (consume("halt")){
-    instruction |= 2 << 10;
-  } else {
-    print_error();
-    fprintf(stderr, "Invalid mode\n");
-    fprintf(stderr, "Valid modes are: run, sleep, or halt\n");
-    *success = false;
-    return 0;
-  }
-
-  return instruction;
-}
-
-// Parse a return-from-exception instruction.
-int consume_rfe(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27;
-  instruction |= 3 << 12;
-
-  return instruction;
-}
-
-// Parse an interprocessor-interrupt instruction.
-int consume_ipi(bool* success){
-  check_privileges(success);
-  if (!*success) return 0;
-
-  int instruction = 31 << 27; // opcode
-  instruction |= 4 << 12; // ID
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  skip();
-
-  instruction |= ra << 22;
-  
-  if (consume_keyword("all")) {
-    // ipi to all cores
-    instruction |= 1 << 11;
-  } else {
-    // ipi to a specific core
-    enum ConsumeResult result;
-    long imm = consume_literal(&result);
-    if (result != FOUND || imm < 0 || imm >= 4){
-      print_error();
-      if (result == NOT_FOUND) fprintf(stderr, "ipi instruction expects 'all' or core num in range [0, 3]\n");
-      *success = false;
-      return 0;
-    }
-
-    assert(0 <= imm && imm < 4);
-
-    instruction |= imm;
-  }
-
-  return instruction;
-}
-
-
-// consume a mov hack return the corresponding encoding
-int consume_mov_hack(int mov_type, bool* success){
-  assert(0 <= mov_type && mov_type < 4); // ensure mov_type is valid
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return 0;
-  }
-
-  enum ConsumeResult result;
-
-  const char* old_current = current;
-  int imm = consume_label_imm(&result); // don't encode bottom two bits of pc  
-  if (result == FOUND) {
-    current = old_current;
-    struct Slice label;
-    consume_identifier(&label);
-
-    // hack to see if this was a .define and not a label
-    if (!hash_map_contains(local_defines[current_file_index], &label)) mov_type |= 2;
-  }
-  else imm = consume_literal(&result);
-  if (result != FOUND){
-    print_error();
-    if (result == NOT_FOUND) fprintf(stderr, "movi expects label or integer literal\n");
-    *success = false;
-    return 0;
-  }
-
-  // Label immediates select movu8/movl4; numeric immediates use movu/movl.
-
-  // [0] movu := lui rA, (imm & 0xFFFFFC00)
-  // [1] movl := addi rA, rA, (imm & 0x3FF)
-  // [2] movu8 := lui rA, ((imm - 8) & 0xFFFFFC00)
-  // [3] movl4 := addi rA, rA, ((imm - 4) & 0x3FF)
-
-  if (mov_type == 2) imm -= 8;
-  else if (mov_type == 3) imm -= 4;
-  
-  int instruction = 0;
-
-  if (mov_type & 1){
-
-    instruction |= 1 << 27; // opcode for add
-    instruction |= ra << 22;
-    instruction |= ra << 17;
-    instruction |= 14 << 12; // add is 14
-
-    int encoding = encode_arithmetic_immediate(imm & 0x3FF, success);
-
-    assert(encoding == (encoding & 0xFFF)); // ensure encoding always fits in 12 bits
-
-    instruction |= encoding;
-  } else {
-    int encoding = encode_lui_immediate(imm & 0xFFFFFC00, success);
-
-    assert(encoding == (encoding & 0x3FFFFF)); // ensure immediate fits in 22 bits
-
-    instruction = 2 << 27; // opcode for lui
-    instruction |= ra << 22;
-    instruction |= encoding;
-  }
-  
-  return instruction; 
+// Labels are PC-relative. Unlike every directive operand, a label here takes
+// precedence over a .define of the same name; this predates the shared
+// resolver and is preserved so existing programs encode identically.
+long consume_immediate(enum ConsumeResult* result, enum OperandKind* kind){
+  return consume_operand(OPERAND_INSTRUCTION, NULL, result, kind);
 }
 
 // Parse and store a .define directive in the current definition map.
@@ -1489,34 +507,17 @@ void record_define(bool* success){
     return;
   }
 
+  // Labels are looked up as they stand at this point in pass 1.
   enum ConsumeResult result;
-  long imm = consume_literal(&result);
-  if (result == NOT_FOUND){
-    struct Slice value_label;
-    if (!consume_identifier(&value_label)){
-      print_error();
-      fprintf(stderr, "Expected integer literal or label\n");
-      *success = false;
-      return;
-    }
-    if (hash_map_contains(local_defines[current_file_index], &value_label)){
-      imm = hash_map_get(local_defines[current_file_index], &value_label);
-    } else if (label_has_definition(local_labels[current_file_index], &value_label)){
-      imm = hash_map_get(local_labels[current_file_index], &value_label);
-    } else if (label_has_definition(global_labels, &value_label)){
-      imm = hash_map_get(global_labels, &value_label);
-    } else {
-      print_error();
-      fprintf(stderr, "Label \"");
-      print_slice_err(&value_label);
-      fprintf(stderr, "\" has not been defined\n");
-      *success = false;
-      return;
-    }
-  } else if (result != FOUND){
-    // error
+  enum OperandKind kind;
+  long imm = consume_operand(OPERAND_DEFINES | OPERAND_LABELS, NULL, &result, &kind);
+  if (result == NOT_FOUND || (result == ERROR && kind == OPERAND_LITERAL)){
     print_error();
     fprintf(stderr, "Expected integer literal or label\n");
+    *success = false;
+    return;
+  }
+  if (result != FOUND){
     *success = false;
     return;
   }
@@ -1529,118 +530,6 @@ void record_define(bool* success){
     return;
   }
   hash_map_insert(local_defines[current_file_index], &label, imm, true, true);
-}
-
-// consumes a single instruction and converts it to binary or hex
-int consume_instruction(enum ConsumeResult* result){
-  int instruction = 0;
-  bool success = true;
-
-  // user instructions
-  skip();
-
-  // One token hash replaces the mnemonic cascade. Prefixes such as "add"/"addc"
-  // stay distinct because the matcher consumes the whole identifier.
-  switch (take_keyword(KW_CLASS_MNEMONIC)) {
-    case KW_AND: instruction = consume_alu_op(0, &success); break;
-    case KW_NAND: instruction = consume_alu_op(1, &success); break;
-    case KW_OR: instruction = consume_alu_op(2, &success); break;
-    case KW_NOR: instruction = consume_alu_op(3, &success); break;
-    case KW_XOR: instruction = consume_alu_op(4, &success); break;
-    case KW_XNOR: instruction = consume_alu_op(5, &success); break;
-    case KW_NOT: instruction = consume_alu_op(6, &success); break;
-    case KW_LSL: instruction = consume_alu_op(7, &success); break;
-    case KW_LSR: instruction = consume_alu_op(8, &success); break;
-    case KW_ASR: instruction = consume_alu_op(9, &success); break;
-    case KW_ROTL: instruction = consume_alu_op(10, &success); break;
-    case KW_ROTR: instruction = consume_alu_op(11, &success); break;
-    case KW_LSLC: instruction = consume_alu_op(12, &success); break;
-    case KW_LSRC: instruction = consume_alu_op(13, &success); break;
-    case KW_ADD: instruction = consume_alu_op(14, &success); break;
-    case KW_ADDC: instruction = consume_alu_op(15, &success); break;
-    case KW_SUB: instruction = consume_alu_op(16, &success); break;
-    case KW_SUBB: instruction = consume_alu_op(17, &success); break;
-    case KW_CMP: instruction = consume_cmp(&success); break;
-    case KW_SXTB: instruction = consume_alu_op(18, &success); break;
-    case KW_SXTD: instruction = consume_alu_op(19, &success); break;
-    case KW_TNCB: instruction = consume_alu_op(20, &success); break;
-    case KW_TNCD: instruction = consume_alu_op(21, &success); break;
-    case KW_LUI: instruction = consume_lui(&success); break;
-    case KW_SWA: instruction = consume_mem(0, true, false, &success); break;
-    case KW_LWA: instruction = consume_mem(0, true, true, &success); break;
-    case KW_SW: instruction = consume_mem(0, false, false, &success); break;
-    case KW_LW: instruction = consume_mem(0, false, true, &success); break;
-    case KW_SDA: instruction = consume_mem(1, true, false, &success); break;
-    case KW_LDA: instruction = consume_mem(1, true, true, &success); break;
-    case KW_SD: instruction = consume_mem(1, false, false, &success); break;
-    case KW_LD: instruction = consume_mem(1, false, true, &success); break;
-    case KW_SBA: instruction = consume_mem(2, true, false, &success); break;
-    case KW_LBA: instruction = consume_mem(2, true, true, &success); break;
-    case KW_SB: instruction = consume_mem(2, false, false, &success); break;
-    case KW_LB: instruction = consume_mem(2, false, true, &success); break;
-    case KW_BR: instruction = consume_branch(0, false, &success); break;
-    case KW_BZ: instruction = consume_branch(1, false, &success); break;
-    case KW_BNZ: instruction = consume_branch(2, false, &success); break;
-    case KW_BS: instruction = consume_branch(3, false, &success); break;
-    case KW_BNS: instruction = consume_branch(4, false, &success); break;
-    case KW_BC: instruction = consume_branch(5, false, &success); break;
-    case KW_BNC: instruction = consume_branch(6, false, &success); break;
-    case KW_BO: instruction = consume_branch(7, false, &success); break;
-    case KW_BNO: instruction = consume_branch(8, false, &success); break;
-    case KW_BPS: instruction = consume_branch(9, false, &success); break;
-    case KW_BNPS: instruction = consume_branch(10, false, &success); break;
-    case KW_BG: instruction = consume_branch(11, false, &success); break;
-    case KW_BGE: instruction = consume_branch(12, false, &success); break;
-    case KW_BL: instruction = consume_branch(13, false, &success); break;
-    case KW_BLE: instruction = consume_branch(14, false, &success); break;
-    case KW_BA: instruction = consume_branch(15, false, &success); break;
-    case KW_BAE: instruction = consume_branch(16, false, &success); break;
-    case KW_BB: instruction = consume_branch(17, false, &success); break;
-    case KW_BBE: instruction = consume_branch(18, false, &success); break;
-    case KW_BRA: instruction = consume_branch(0, true, &success); break;
-    case KW_BZA: instruction = consume_branch(1, true, &success); break;
-    case KW_BNZA: instruction = consume_branch(2, true, &success); break;
-    case KW_BSA: instruction = consume_branch(3, true, &success); break;
-    case KW_BNSA: instruction = consume_branch(4, true, &success); break;
-    case KW_BCA: instruction = consume_branch(5, true, &success); break;
-    case KW_BNCA: instruction = consume_branch(6, true, &success); break;
-    case KW_BOA: instruction = consume_branch(7, true, &success); break;
-    case KW_BNOA: instruction = consume_branch(8, true, &success); break;
-    case KW_BPA: instruction = consume_branch(9, true, &success); break;
-    case KW_BNPA: instruction = consume_branch(10, true, &success); break;
-    case KW_BGA: instruction = consume_branch(11, true, &success); break;
-    case KW_BGEA: instruction = consume_branch(12, true, &success); break;
-    case KW_BLA: instruction = consume_branch(13, true, &success); break;
-    case KW_BLEA: instruction = consume_branch(14, true, &success); break;
-    case KW_BAA: instruction = consume_branch(15, true, &success); break;
-    case KW_BAEA: instruction = consume_branch(16, true, &success); break;
-    case KW_BBA: instruction = consume_branch(17, true, &success); break;
-    case KW_BBEA: instruction = consume_branch(18, true, &success); break;
-    case KW_JMP: instruction = consume_jmp(&success); break;
-    case KW_ADPC: instruction = consume_adpc(&success); break;
-    case KW_TRAP: instruction = consume_trap(&success); break;
-    case KW_FADA: instruction = consume_atomic(true, true, &success); break;
-    case KW_FAD: instruction = consume_atomic(false, true, &success); break;
-    case KW_SWPA: instruction = consume_atomic(true, false, &success); break;
-    case KW_SWP: instruction = consume_atomic(false, false, &success); break;
-    case KW_TLBR: instruction = consume_tlb_op(0, &success); break;
-    case KW_TLBW: instruction = consume_tlb_op(1, &success); break;
-    case KW_TLBI: instruction = consume_tlb_op(2, &success); break;
-    case KW_TLBC: instruction = consume_tlb_op(3, &success); break;
-    case KW_CRMV: instruction = consume_crmv(&success); break;
-    case KW_MODE: instruction = consume_mode_op(&success); break;
-    case KW_RFE: instruction = consume_rfe(&success); break;
-    case KW_IPI: instruction = consume_ipi(&success); break;
-    case KW_EOI: instruction = consume_eoi(&success); break;
-    // hacks to make movi and call work
-    case KW_MOVU: instruction = consume_mov_hack(0, &success); break;
-    case KW_MOVL: instruction = consume_mov_hack(1, &success); break;
-    default: *result = NOT_FOUND; break;
-  }
-
-  if (!success) *result = ERROR;
-
-  return instruction;
 }
 
 // First pass to collect labels and section sizes without emitting output.
@@ -1755,7 +644,7 @@ bool process_labels(char const* const prog){
         }
 
         enum ConsumeResult result;
-        long imm = consume_define_or_literal(&result, ".origin");
+        long imm = consume_constant(&result, ".origin");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -1814,7 +703,7 @@ bool process_labels(char const* const prog){
       }
       else if ((dir == KW_DIR_FILL)) {
         enum ConsumeResult result; 
-        consume_define_or_literal_or_label_abs(&result, ".fill");
+        consume_operand(OPERAND_DATA, ".fill", &result, NULL);
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -1834,7 +723,7 @@ bool process_labels(char const* const prog){
       }
       else if ((dir == KW_DIR_FILD)) {
         enum ConsumeResult result; 
-        consume_define_or_literal(&result, ".fild");
+        consume_constant(&result, ".fild");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -1854,7 +743,7 @@ bool process_labels(char const* const prog){
       }
       else if ((dir == KW_DIR_FILB)) {
         enum ConsumeResult result; 
-        consume_define_or_literal(&result, ".filb");
+        consume_constant(&result, ".filb");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -1874,7 +763,7 @@ bool process_labels(char const* const prog){
       }
       else if ((dir == KW_DIR_SPACE)) { 
         enum ConsumeResult result; 
-        long imm = consume_define_or_literal(&result, ".space");
+        long imm = consume_constant(&result, ".space");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -1983,7 +872,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     else if ((dir == KW_DIR_ORIGIN)) { 
       if (is_kernel){
         enum ConsumeResult result;
-        long imm = consume_define_or_literal(&result, ".origin");
+        long imm = consume_constant(&result, ".origin");
         if (result != FOUND){
           if (result == NOT_FOUND){
             print_error();
@@ -2047,7 +936,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if ((dir == KW_DIR_FILL)) {
       enum ConsumeResult result; 
-      long imm = consume_define_or_literal_or_label_abs(&result, ".fill");
+      long imm = consume_operand(OPERAND_DATA, ".fill", &result, NULL);
       if (result != FOUND){
         if (result == NOT_FOUND){
           print_error();
@@ -2077,7 +966,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if ((dir == KW_DIR_FILD)) {
       enum ConsumeResult result; 
-      long imm = consume_define_or_literal(&result, ".fild");
+      long imm = consume_constant(&result, ".fild");
       if (result != FOUND){
         if (result == NOT_FOUND){
           print_error();
@@ -2107,7 +996,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if ((dir == KW_DIR_FILB)) {
       enum ConsumeResult result; 
-      long imm = consume_define_or_literal(&result, ".filb");
+      long imm = consume_constant(&result, ".filb");
       if (result != FOUND){
         if (result == NOT_FOUND){
           print_error();
@@ -2135,7 +1024,7 @@ bool to_binary(char const* const prog, struct InstructionArrayList* instructions
     }
     else if ((dir == KW_DIR_SPACE)) { 
       enum ConsumeResult result; 
-      long imm = consume_define_or_literal(&result, ".space");
+      long imm = consume_constant(&result, ".space");
       if (result != FOUND){
         if (result == NOT_FOUND){
           print_error();
