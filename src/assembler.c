@@ -267,62 +267,80 @@ static bool is_valid_define_name(const char* start, size_t len) {
   return true;
 }
 
-// Set the command-line definitions used while preprocessing each input.
-void set_cli_defines(int count, const char* const* defines){
-  cli_define_count = count;
-  cli_defines = defines;
-}
+// Split "NAME=value" into its name and integer value. The value is parsed
+// with the assembler's literal syntax. Reports the problem and returns false
+// when the definition is malformed.
+static bool parse_cli_define(const char* def, struct Slice* name, long* value){
+  const char* eq = strchr(def, '=');
+  if (eq == NULL || eq == def || *(eq + 1) == '\0'){
+    fprintf(stderr, "Invalid -D definition: %s (expected -DNAME=value)\n", def);
+    return false;
+  }
+  name->start = def;
+  name->len = (size_t)(eq - def);
+  if (!is_valid_define_name(name->start, name->len)){
+    fprintf(stderr, "Invalid -D name: %.*s\n", (int)name->len, name->start);
+    return false;
+  }
 
-// Insert command-line definitions into the current definition map.
-static bool apply_cli_defines(void){
-  if (cli_define_count <= 0) return true;
-  for (int i = 0; i < cli_define_count; ++i){
-    const char* def = cli_defines[i];
-    const char* eq = strchr(def, '=');
-    if (eq == NULL || eq == def || *(eq + 1) == '\0'){
-      fprintf(stderr, "Invalid -D definition: %s\n", def);
-      return false;
-    }
-    size_t name_len = (size_t)(eq - def);
-    if (!is_valid_define_name(def, name_len)){
-      fprintf(stderr, "Invalid -D name: %.*s\n", (int)name_len, def);
-      return false;
-    }
+  // Run the lexer over the value text, then restore the cursor.
+  const char* old_current = current;
+  const char* old_buffer = current_buffer_start;
+  unsigned old_line = line_count;
+  const char* old_file = current_file;
 
-    struct Slice name_view = {def, name_len};
-    if (hash_map_contains(local_defines[current_file_index], &name_view)){
-      fprintf(stderr, "constant has multiple definitions\n");
-      return false;
-    }
+  current = eq + 1;
+  current_buffer_start = current;
+  line_count = 1;
+  current_file = "<command line>";
 
-    const char* old_current = current;
-    const char* old_buffer = current_buffer_start;
-    unsigned old_line = line_count;
-    const char* old_file = current_file;
+  enum ConsumeResult result;
+  *value = consume_literal(&result);
+  skip();
+  bool ok = (result == FOUND) && (*current == '\0');
 
-    current = eq + 1;
-    current_buffer_start = current;
-    line_count = 1;
-    current_file = "<command line>";
+  current = old_current;
+  current_buffer_start = old_buffer;
+  line_count = old_line;
+  current_file = old_file;
 
-    enum ConsumeResult result;
-    long value = consume_literal(&result);
-    skip();
-    bool ok = (result == FOUND) && (*current == '\0');
-
-    current = old_current;
-    current_buffer_start = old_buffer;
-    line_count = old_line;
-    current_file = old_file;
-
-    if (!ok){
-      fprintf(stderr, "Invalid -D value for %.*s\n", (int)name_len, def);
-      return false;
-    }
-
-    hash_map_insert(local_defines[current_file_index], &name_view, value, true, true);
+  if (!ok){
+    fprintf(stderr, "Invalid -D value for %.*s\n", (int)name->len, name->start);
+    return false;
   }
   return true;
+}
+
+// Validate and record the -DNAME=value definitions every file starts with.
+// The strings must outlive assemble(); they are not copied.
+bool set_cli_defines(int count, const char* const* defines){
+  for (int i = 0; i < count; ++i){
+    struct Slice name;
+    long value;
+    if (!parse_cli_define(defines[i], &name, &value)) return false;
+    for (int j = 0; j < i; ++j){
+      struct Slice earlier = {defines[j], (size_t)(strchr(defines[j], '=') - defines[j])};
+      if (compare_slice_to_slice(&earlier, &name)){
+        fprintf(stderr, "Duplicate -D definition for %.*s\n", (int)name.len, name.start);
+        return false;
+      }
+    }
+  }
+  cli_define_count = count;
+  cli_defines = defines;
+  return true;
+}
+
+// Insert the validated command-line definitions into this file's .define map.
+static void apply_cli_defines(void){
+  for (int i = 0; i < cli_define_count; ++i){
+    struct Slice name;
+    long value;
+    bool ok = parse_cli_define(cli_defines[i], &name, &value);
+    assert(ok && "set_cli_defines validated every definition");
+    (void)ok;
+    hash_map_insert(local_defines[current_file_index], &name, value, true, true);
+  }
 }
 
 // Look up a .define / -D constant visible in the current file.
@@ -831,7 +849,8 @@ static bool create_file_symbols(char const* const prog){
       local_globals[current_file_index] == NULL) {
     return false;
   }
-  return apply_cli_defines();
+  apply_cli_defines();
+  return true;
 }
 
 // Run one pass over every file in order. Section and pc state carry over
@@ -954,9 +973,8 @@ static void destroy_symbol_tables(int num_files){
 }
 
 // assemble an entire program
-struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
-  const char *const *const argv, char** files, struct LabelList** labels_out,
-  struct DebugInfoList** labels_out_c){
+struct ProgramDescriptor* assemble(int num_files, const char* const* paths, char** files,
+  bool kernel, struct LabelList** labels_out, struct DebugInfoList** labels_out_c){
 
   is_kernel = kernel;
   memset(sections, 0, sizeof(sections));
@@ -966,7 +984,6 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   // Source-line records are only retained when the caller asked for -g output.
   debug_info_list = (labels_out_c != NULL) ? create_debug_info_list() : NULL;
 
-  const char** names = malloc((size_t)num_files * sizeof(*names));
   local_labels = calloc((size_t)num_files, sizeof(struct HashMap*));
   local_defines = calloc((size_t)num_files, sizeof(struct HashMap*));
   local_globals = calloc((size_t)num_files, sizeof(struct HashMap*));
@@ -977,14 +994,12 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   struct InstructionArrayList* images = NULL;
   struct ProgramDescriptor* program = NULL;
   uint32_t entry_point = 0;
-  if (names == NULL || local_labels == NULL || local_defines == NULL ||
+  if (local_labels == NULL || local_defines == NULL ||
       local_globals == NULL || global_labels == NULL) {
     fprintf(stderr, "Assembler: failed to allocate symbol tables for %d files\n", num_files);
     goto done;
   }
-  for (int i = 0; i < num_files; ++i) names[i] = argv[file_names[i]];
-
-  if (!run_pass(1, num_files, names, files)) goto done;
+  if (!run_pass(1, num_files, paths, files)) goto done;
   layout_sections(num_files);
 
   if (!is_kernel){
@@ -997,7 +1012,7 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   }
 
   images = create_section_images();
-  if (images == NULL || !run_pass(2, num_files, names, files)) goto done;
+  if (images == NULL || !run_pass(2, num_files, paths, files)) goto done;
 
   if (is_kernel){
     current_section = END_SECTION;
@@ -1028,6 +1043,5 @@ done:
   if (images != NULL) destroy_instruction_array_list(images);
   destroy_debug_info_list(debug_info_list);
   debug_info_list = NULL;
-  free(names);
   return program;
 }

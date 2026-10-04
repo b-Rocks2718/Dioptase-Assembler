@@ -5,7 +5,6 @@
 
 #include "slice.h"
 #include "preprocessor.h"
-#include "assembler.h"
 #include "lexer.h"
 #include "keyword.h"
 
@@ -208,8 +207,7 @@ static void free_partial_results(char** result_list, int count){
 
 // copy the program into a new string, but without the comments
 // expand macros into real instructions
-char** preprocess(int num_files, int* file_names, bool is_kernel,
-  const char *const *const argv, const char * const * const files){
+char** preprocess(int num_files, const char* const* paths, const char* const* files){
 
   char ** result_list = malloc(num_files * sizeof(*result_list));
   if (result_list == NULL) {
@@ -223,9 +221,8 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     current = files[i];
     current_buffer_start = current;
     line_count = 1;
-    pc = is_kernel ? 0 : 0x80000000;
     result_index = 0;
-    current_file = argv[file_names[i]];
+    current_file = paths[i];
 
     // Size the output from the input so macro expansion does not recopy the
     // buffer from a 60-byte seed. One extra byte holds the leading NUL the

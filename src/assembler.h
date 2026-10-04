@@ -5,6 +5,7 @@
 #include "debug.h"
 #include "lexer.h"
 
+// Address of the statement being assembled (runtime address in pass 2).
 extern unsigned long pc;
 
 // does the file wish to use pivileges instructions?
@@ -12,11 +13,17 @@ extern bool is_kernel;
 
 struct LabelList;
 
-struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kernel,
-  const char *const *const argv, char** files, struct LabelList** labels_out,
-  struct DebugInfoList** labels_c_out);
+// Assemble the preprocessed buffers `files` (named `paths` in diagnostics)
+// into one program. Returns NULL after reporting the first error. When
+// labels_out / debug_out are non-NULL they receive the -g label and debug
+// tables, owned by the caller.
+struct ProgramDescriptor* assemble(int num_files, const char* const* paths, char** files,
+  bool is_kernel, struct LabelList** labels_out, struct DebugInfoList** debug_out);
 
-void set_cli_defines(int count, const char* const* defines);
+// Validate and record -DNAME=value definitions applied to every file.
+// Returns false after reporting the first malformed or duplicate definition.
+// The strings are borrowed and must outlive assemble().
+bool set_cli_defines(int count, const char* const* defines);
 
 // Identify output sections and the implicit kernel section.
 // NO_SECTION marks user-mode code before any .text/.rodata/.data/.bss
