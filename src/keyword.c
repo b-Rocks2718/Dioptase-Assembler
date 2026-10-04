@@ -165,6 +165,7 @@ static uint32_t kw_hash(const char* text, size_t len) {
   return hash;
 }
 
+// Match the keyword at `current` against the generated table (contract in keyword.h).
 enum KeywordId take_keyword(unsigned class_mask) {
   if (current != current_buffer_start && is_identifier_char(current[-1])) {
     return KW_NONE;

@@ -98,6 +98,7 @@ void fwrite_instruction_array_list(FILE* ptr, struct InstructionArrayList* list,
   Dynamic array used for holding instructions
 */
 
+// Allocate an empty array of `capacity` words placed at byte address origin.
 struct InstructionArray* create_instruction_array(size_t capacity, int origin){
   int* instructions = malloc(sizeof(int) * capacity);
 

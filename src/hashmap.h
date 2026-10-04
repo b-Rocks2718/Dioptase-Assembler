@@ -36,6 +36,7 @@ void hash_map_insert(struct HashMap* hmap, const struct Slice* key, long value, 
 // Return the value stored for key, or 0 when the key is absent.
 long hash_map_get(const struct HashMap* hmap, const struct Slice* key);
 
+// Return whether key is present, defined or not.
 bool hash_map_contains(const struct HashMap* hmap, const struct Slice* key);
 
 // Return whether key is present and has been defined rather than only declared.
