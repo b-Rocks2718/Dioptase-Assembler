@@ -15,10 +15,11 @@ enum {
   Linked list for holding instruction arrays
 */
 
+// Allocate an empty list; arrays are added with instruction_array_list_append.
 struct InstructionArrayList* create_instruction_array_list(void){
   struct InstructionArrayList* list = malloc(sizeof(struct InstructionArrayList));
-  list->head = create_instruction_array(10, 0);
-  list->tail = list->head;
+  list->head = NULL;
+  list->tail = NULL;
   return list;
 }
 

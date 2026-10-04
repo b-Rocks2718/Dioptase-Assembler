@@ -10,7 +10,6 @@
 #include "hashmap.h"
 #include "instruction_array.h"
 #include "label_list.h"
-#include "preprocessor.h"
 #include "elf.h"
 #include "debug.h"
 #include "keyword.h"
@@ -19,32 +18,40 @@
 
 /*
   Two-pass assembler.
-  First pass calculates addresses of labels
-  Second pass converts to text into binary
+
+  Pass 1 walks every file to define labels and measure each section; labels
+  are stored as packed (section, offset) pairs because section addresses are
+  not known yet. Layout then assigns every section its address, labels are
+  rewritten to absolute addresses, and pass 2 walks the files again with the
+  same statement handlers, this time emitting bytes.
+
+  Both passes run the same code (assemble_file and the handle_* functions),
+  so they always agree on section offsets. Validation happens in pass 1;
+  pass 2 only adds what needs final addresses: label values, range checks on
+  label-valued operands, emitted bytes, warnings, and debug records.
 */
 
 unsigned long pc = 0;
-unsigned entry_point = 0;
-
-enum UserSection current_section = NO_SECTION;
-struct InstructionArray* text_instruction_array = NULL;
-struct InstructionArray* rodata_instruction_array = NULL;
-struct InstructionArray* data_instruction_array = NULL;
-static struct InstructionArray* section_arrays[SECTION_COUNT];
-unsigned bss_size = 0;
-static uint32_t section_offsets[SECTION_COUNT];
-static uint32_t section_sizes[SECTION_COUNT];
-static uint32_t section_bases[SECTION_COUNT];
-static uint32_t section_load_bases[SECTION_COUNT];
-static bool section_load_set[SECTION_COUNT];
-
-static struct DebugInfoList* debug_info_list = NULL;
 
 // does the file wish to use pivileges instructions?
 bool is_kernel = false;
 
-int current_file_index;
-int pass_number = 1;
+static int pass_number = 1;
+static int current_file_index;
+static enum UserSection current_section = NO_SECTION;
+
+// Layout and emission state for one output section.
+struct Section {
+  struct InstructionArray* words;  // pass 2 image; NULL for user-mode .bss
+  uint32_t offset;     // bytes emitted so far in the current pass
+  uint32_t size;       // total bytes, fixed after pass 1
+  uint32_t base;       // image address assigned by layout
+  uint32_t load_base;  // runtime address used for labels and pc; == base unless set by *_load
+  bool load_set;       // load_base given by .text_load/.rodata_load/.data_load/.bss_load
+};
+static struct Section sections[SECTION_COUNT];
+
+static struct DebugInfoList* debug_info_list = NULL;
 
 // Map labels/defines to their addresses or values.
 // local_labels: per-file label table used for local resolution and duplicate checks.
@@ -60,37 +67,20 @@ static const char* const* cli_defines = NULL;
 
 // Byte sizing for directive accounting and output packing.
 static const uint32_t kWordBytes = 4;
-static const uint32_t kHalfBytes = 2;
-static const uint32_t kByteBytes = 1;
 
+// User programs load at USER_BASE_ADDR with page-aligned text/rodata/data
+// (syntax doc "ELF layout"); kernel sections are padded to 512-byte blocks.
 #define USER_BASE_ADDR 0x80000000u
 #define SECTION_ALIGN 0x1000u
 static const uint32_t kKernelSectionAlign = 512;
-
-// Reset section offsets.
-static void reset_section_offsets(void) {
-  for (int i = 0; i < SECTION_COUNT; ++i) section_offsets[i] = 0;
-}
-
-// Reset section load bases.
-static void reset_section_load_bases(void) {
-  for (int i = 0; i < SECTION_COUNT; ++i) {
-    section_load_bases[i] = 0;
-    section_load_set[i] = false;
-  }
-}
+// Written to the kernel end section so the padded .bss size can be computed.
+static const uint32_t kKernelEndSentinel = 0xAAAAAAAAu;
 
 // Round a value up to the requested alignment.
 static uint32_t align_up(uint32_t value, uint32_t align) {
   uint32_t rem = value % align;
   if (rem == 0) return value;
   return value + (align - rem);
-}
-
-// Return the load base of the section used by PC-relative calculations.
-// Returns the runtime base for the section.
-static uint32_t section_pc_base(enum UserSection section){
-  return section_load_bases[section];
 }
 
 // Check whether a section index is valid for the active mode.
@@ -102,6 +92,86 @@ static bool is_section_in_range(enum UserSection section){
   return section >= TEXT_SECTION && section <= BSS_SECTION;
 }
 
+// Recompute pc for the current section. Computed in 64 bits so that the
+// pass 2 address-space check sees a section running past 4 GiB.
+static void update_pc(void){
+  struct Section* sec = &sections[current_section];
+  pc = (unsigned long)sec->load_base + sec->offset;
+}
+
+// Advance the current section by `count` bytes. In pass 2 the bytes are also
+// written to the section image: `bytes`, or zeros when bytes is NULL. .bss
+// has no image, so only its offset grows.
+static void emit_bytes(const uint8_t* bytes, uint32_t count){
+  struct Section* sec = &sections[current_section];
+  if (pass_number == 2 && current_section != BSS_SECTION){
+    for (uint32_t i = 0; i < count; ++i){
+      instruction_array_append_byte(sec->words, bytes != NULL ? bytes[i] : 0,
+                                    (int)(sec->base + sec->offset + i));
+    }
+  }
+  sec->offset += count;
+  update_pc();
+}
+
+// Emit one aligned instruction word.
+static void emit_word(int word){
+  struct Section* sec = &sections[current_section];
+  if (pass_number == 2) instruction_array_append(sec->words, word);
+  sec->offset += kWordBytes;
+  update_pc();
+}
+
+// Encode the least-significant bytes of value in little-endian order.
+// value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
+static void encode_value_bytes(uint32_t value, uint8_t* out, uint32_t count){
+  for (uint32_t i = 0; i < count; ++i){
+    out[i] = (uint8_t)(value >> (8 * i));
+  }
+}
+
+// Check that the current directive is being emitted in an allowed section.
+static bool ensure_valid_section(const char* context) {
+  if (!is_section_in_range(current_section)) {
+    print_error();
+    if (strcmp(context, "label") == 0) {
+      fprintf(stderr, "Label defined while not in any section\n");
+    } else if (strcmp(context, "instruction") == 0) {
+      fprintf(stderr, "cannot use instructions while not in any section\n");
+    } else {
+      fprintf(stderr, "cannot use %s while not in any section\n", context);
+    }
+    return false;
+  }
+  return true;
+}
+
+// Report a directive that emits data being used in .bss, which has no image.
+static bool reject_in_bss(const char* what){
+  if (current_section != BSS_SECTION) return true;
+  print_error();
+  fprintf(stderr, "%s not allowed in .bss section\n", what);
+  return false;
+}
+
+// Pack a section index and offset for resolution after layout.
+static long encode_section_offset(enum UserSection section, uint32_t offset) {
+  return (long)(((uint64_t)section << 32) | offset);
+}
+
+// Replace packed section offsets in a label map with absolute addresses.
+static void adjust_label_map_for_sections(struct HashMap* map) {
+  for (size_t i = 0; i < map->size; ++i){
+    for (struct HashEntry* entry = map->arr[i]; entry != NULL; entry = entry->next){
+      if (!entry->is_defined) continue;
+      uint64_t raw = (uint64_t)entry->value;
+      enum UserSection section = (enum UserSection)(raw >> 32);
+      uint32_t offset = (uint32_t)(raw & 0xFFFFFFFFu);
+      entry->value = (long)(sections[section].load_base + offset);
+    }
+  }
+}
+
 // Forward declaration for alignment parsing helpers.
 static long consume_constant(enum ConsumeResult* result, const char* context);
 
@@ -111,18 +181,23 @@ static bool is_power_of_two_u32(uint32_t value){
   return value != 0 && (value & (value - 1)) == 0;
 }
 
+// Parse a literal or .define operand for `directive`, reporting a missing one.
+static bool parse_constant_operand(const char* directive, const char* expected, long* value){
+  enum ConsumeResult result;
+  *value = consume_constant(&result, directive);
+  if (result == FOUND) return true;
+  if (result == NOT_FOUND){
+    print_error();
+    fprintf(stderr, "Invalid %s %s; expected integer literal or .define constant\n", directive, expected);
+  }
+  return false;
+}
+
 // Parse and validate a byte alignment value for .align.
 // Returns true on success and fills alignment_out.
-static bool parse_alignment(enum ConsumeResult* result, const char* directive,
-                            uint32_t* alignment_out){
-  long imm = consume_constant(result, directive);
-  if (*result != FOUND){
-    if (*result == NOT_FOUND){
-      print_error();
-      fprintf(stderr, "Invalid %s value; expected integer literal or .define constant\n", directive);
-    }
-    return false;
-  }
+static bool parse_alignment(const char* directive, uint32_t* alignment_out){
+  long imm;
+  if (!parse_constant_operand(directive, "value", &imm)) return false;
   if (imm <= 0 || imm >= ((long)1 << 32)){
     print_error();
     fprintf(stderr, "%s value must be a positive 32-bit integer\n", directive);
@@ -139,22 +214,15 @@ static bool parse_alignment(enum ConsumeResult* result, const char* directive,
 }
 
 // Parse a kernel section load-base directive such as .text_load.
-// Returns true on success; updates section_load_bases during pass 1.
+// Pass 1 records the address; pass 2 re-parses it and checks it still agrees.
 static bool parse_section_load_directive(enum UserSection section, const char* directive){
   if (!is_kernel){
     print_error();
     fprintf(stderr, "%s can only be used in kernel mode\n", directive);
     return false;
   }
-  enum ConsumeResult result;
-  long imm = consume_constant(&result, directive);
-  if (result != FOUND){
-    if (result == NOT_FOUND){
-      print_error();
-      fprintf(stderr, "Invalid %s value; expected integer literal or .define constant\n", directive);
-    }
-    return false;
-  }
+  long imm;
+  if (!parse_constant_operand(directive, "value", &imm)) return false;
   if (imm < 0 || imm >= ((long)1 << 32)){
     print_error();
     fprintf(stderr, "%s address must be a 32-bit unsigned integer\n", directive);
@@ -167,164 +235,23 @@ static bool parse_section_load_directive(enum UserSection section, const char* d
     return false;
   }
 
+  struct Section* sec = &sections[section];
   if (pass_number == 1){
-    if (section_offsets[section] != 0){
+    if (sec->offset != 0){
       print_error();
       fprintf(stderr, "%s must appear before any content in that section\n", directive);
       return false;
     }
-    if (section_load_set[section] && section_load_bases[section] != addr){
+    if (sec->load_set && sec->load_base != addr){
       print_error();
       fprintf(stderr, "%s specified multiple times with different values\n", directive);
       return false;
     }
-    section_load_bases[section] = addr;
-    section_load_set[section] = true;
-  } else {
-    if (section_load_set[section] && section_load_bases[section] != addr){
-      print_error();
-      fprintf(stderr, "%s value does not match first pass\n", directive);
-      return false;
-    }
-  }
-  return true;
-}
-
-// Encode the least-significant bytes of value in little-endian order.
-// value is the integer to encode; out must have space for count bytes; count is 1, 2, or 4.
-static void encode_value_bytes(uint32_t value, uint8_t* out, uint32_t count){
-  for (uint32_t i = 0; i < count; ++i){
-    out[i] = (uint8_t)(value >> (8 * i));
-  }
-}
-
-// Word slots needed to hold a section measured in bytes during pass 1.
-static size_t section_word_capacity(enum UserSection section) {
-  size_t words = ((size_t)section_sizes[section] + (kWordBytes - 1)) / kWordBytes;
-  if (words == 0) words = 1;
-  return words;
-}
-
-// Grow an instruction array to at least `words` slots. Existing words are kept.
-static bool reserve_instruction_words(struct InstructionArray* arr, size_t words) {
-  if (words < 1) words = 1;
-  if (words <= arr->capacity) return true;
-  int* grown = realloc(arr->instructions, words * sizeof(int));
-  if (grown == NULL) {
-    fprintf(stderr, "Assembler: failed to reserve %zu instruction words\n", words);
-    return false;
-  }
-  arr->instructions = grown;
-  arr->capacity = words;
-  return true;
-}
-
-// Append raw bytes into a section array and advance offsets.
-// section_bases are initialized and aligned.
-static void append_bytes_user(struct InstructionArray* arr, const uint8_t* bytes, uint32_t count,
-                              enum UserSection section){
-  for (uint32_t i = 0; i < count; ++i){
-    uint32_t abs_pc = section_bases[section] + section_offsets[section];
-    instruction_array_append_byte(arr, bytes[i], (int)abs_pc);
-    section_offsets[section] += kByteBytes;
-  }
-  pc = section_pc_base(section) + section_offsets[section];
-}
-
-// Append zero bytes into a section array and advance offsets.
-// section_bases are initialized and aligned.
-static void append_zero_bytes_user(struct InstructionArray* arr, uint32_t count, enum UserSection section){
-  for (uint32_t i = 0; i < count; ++i){
-    uint32_t abs_pc = section_bases[section] + section_offsets[section];
-    instruction_array_append_byte(arr, 0, (int)abs_pc);
-    section_offsets[section] += kByteBytes;
-  }
-  pc = section_pc_base(section) + section_offsets[section];
-}
-
-// Report misaligned instruction addresses with context.
-// Returns false after emitting an error.
-static bool report_instruction_alignment_error(uint32_t address, const char* label){
-  print_error();
-  fprintf(stderr, "Instruction address must be %u-byte aligned; %s is 0x%08X\n",
-          kWordBytes, label, address);
-  return false;
-}
-
-// Compute the user-section load addresses from their emitted sizes.
-static void compute_section_bases(void) {
-  section_bases[TEXT_SECTION] = USER_BASE_ADDR;
-  section_bases[RODATA_SECTION] = align_up(section_bases[TEXT_SECTION] + section_sizes[TEXT_SECTION], SECTION_ALIGN);
-  section_bases[DATA_SECTION] = align_up(section_bases[RODATA_SECTION] + section_sizes[RODATA_SECTION], SECTION_ALIGN);
-  section_bases[BSS_SECTION] = section_bases[DATA_SECTION] + section_sizes[DATA_SECTION];
-}
-
-// Compute kernel section bases with 512-byte padding between sections.
-static void compute_kernel_section_bases(void){
-  uint32_t cursor = 0;
-  section_bases[IMPLICIT_SECTION] = cursor;
-  cursor += align_up(section_sizes[IMPLICIT_SECTION], kKernelSectionAlign);
-
-  section_bases[TEXT_SECTION] = cursor;
-  cursor += align_up(section_sizes[TEXT_SECTION], kKernelSectionAlign);
-
-  section_bases[RODATA_SECTION] = cursor;
-  cursor += align_up(section_sizes[RODATA_SECTION], kKernelSectionAlign);
-
-  section_bases[DATA_SECTION] = cursor;
-  cursor += align_up(section_sizes[DATA_SECTION], kKernelSectionAlign);
-
-  section_bases[BSS_SECTION] = cursor;
-  cursor += align_up(section_sizes[BSS_SECTION], kKernelSectionAlign);
-
-  section_bases[END_SECTION] = cursor;
-}
-
-// Finalize runtime section bases after sizes are known.
-static void finalize_section_load_bases(void){
-  for (int i = 0; i < SECTION_COUNT; ++i){
-    if (!section_load_set[i]) section_load_bases[i] = section_bases[i];
-  }
-  if (is_kernel && section_load_set[BSS_SECTION]){
-    uint32_t bss_padded = align_up(section_sizes[BSS_SECTION], kKernelSectionAlign);
-    section_load_bases[END_SECTION] = section_load_bases[BSS_SECTION] + bss_padded;
-  }
-}
-
-// Pack a section index and offset for resolution after layout.
-static uint64_t encode_section_offset(enum UserSection section, uint32_t offset) {
-  // Pack section + offset for pass 1; resolved to absolute addresses after layout.
-  return ((uint64_t)section << 32) | offset;
-}
-
-// Replace packed section offsets in a label map with absolute addresses.
-static void adjust_label_map_for_sections(struct HashMap* map) {
-  // Convert packed section offsets into absolute addresses once section sizes are known.
-  for (size_t i = 0; i < map->size; ++i){
-    struct HashEntry* entry = map->arr[i];
-    while (entry != NULL){
-      if (entry->is_defined){
-        uint64_t raw = (uint64_t)entry->value;
-        enum UserSection section = (enum UserSection)(raw >> 32);
-        uint32_t offset = (uint32_t)(raw & 0xFFFFFFFFu);
-        entry->value = (long)(section_load_bases[section] + offset);
-      }
-      entry = entry->next;
-    }
-  }
-}
-
-// Check that the current directive is being emitted in an allowed section.
-static bool ensure_valid_section(const char* context) {
-  if (!is_section_in_range(current_section)) {
+    sec->load_base = addr;
+    sec->load_set = true;
+  } else if (sec->load_set && sec->load_base != addr){
     print_error();
-    if (strcmp(context, "label") == 0) {
-      fprintf(stderr, "Label defined while not in any section\n");
-    } else if (strcmp(context, "instruction") == 0) {
-      fprintf(stderr, "cannot use instructions while not in any section\n");
-    } else {
-      fprintf(stderr, "cannot use %s while not in any section\n", context);
-    }
+    fprintf(stderr, "%s value does not match first pass\n", directive);
     return false;
   }
   return true;
@@ -497,7 +424,7 @@ long consume_immediate(enum ConsumeResult* result, enum OperandKind* kind){
 }
 
 // Parse and store a .define directive in the current definition map.
-void record_define(bool* success){
+static void record_define(bool* success){
   struct Slice label;
   if (!consume_identifier(&label)){
     // error
@@ -532,13 +459,355 @@ void record_define(bool* success){
   hash_map_insert(local_defines[current_file_index], &label, imm, true, true);
 }
 
-// First pass to collect labels and section sizes without emitting output.
-// Returns true on success; updates label maps and section offsets.
-bool process_labels(char const* const prog){
+// ---- Statement handlers (shared by both passes) ---------------------------
+
+// Define a label at the current position (pass 1). Pass 2 has nothing to do.
+static bool handle_label(const struct Slice* label){
+  if (pass_number == 2) return true;
+  if (!ensure_valid_section("label")) return false;
+  long label_value = encode_section_offset(current_section, sections[current_section].offset);
+
+  struct HashMap* locals = local_labels[current_file_index];
+  if (label_has_definition(locals, label)){
+    print_error();
+    fprintf(stderr, "Duplicate label\n");
+    return false;
+  }
+  hash_map_insert(locals, label, label_value, true, current_section != TEXT_SECTION);
+
+  // A label declared .global earlier in this file also defines the export.
+  if (hash_map_contains(local_globals[current_file_index], label)){
+    if (label_has_definition(global_labels, label)){
+      print_error();
+      fprintf(stderr, "Duplicate global label\n");
+      return false;
+    }
+    make_defined(global_labels, label, label_value);
+  }
+  return true;
+}
+
+// .global NAME: export NAME. Pass 1 records the declaration (and the
+// definition, if NAME is already defined in this file); pass 2 reports a
+// declaration that no file defined.
+static bool handle_global(void){
+  struct Slice label;
+  if (!consume_identifier(&label)){
+    print_error();
+    fprintf(stderr, ".global directive requires a label\n");
+    return false;
+  }
+
+  if (pass_number == 2){
+    if (label_has_definition(global_labels, &label)) return true;
+    print_error();
+    fprintf(stderr, "Global label \"");
+    print_slice_err(&label);
+    fprintf(stderr, "\" is declared .global but never defined\n");
+    return false;
+  }
+
+  // Track per-file global declarations to detect duplicate exports.
+  bool is_data = current_section != TEXT_SECTION;
+  if (!hash_map_contains(local_globals[current_file_index], &label)){
+    hash_map_insert(local_globals[current_file_index], &label, 0, false, is_data);
+  }
+  if (!hash_map_contains(global_labels, &label)){
+    hash_map_insert(global_labels, &label, 0, false, is_data);
+  }
+
+  struct HashMap* locals = local_labels[current_file_index];
+  if (label_has_definition(locals, &label)){
+    if (label_has_definition(global_labels, &label)){
+      print_error();
+      fprintf(stderr, "Duplicate global label\n");
+      return false;
+    }
+    make_defined(global_labels, &label, hash_map_get(locals, &label));
+  }
+  return true;
+}
+
+// .origin ADDR (kernel, implicit section only): pad forward to ADDR.
+static bool handle_origin(void){
+  if (!is_kernel){
+    print_error();
+    fprintf(stderr, ".origin can only be used in kernel mode\n");
+    return false;
+  }
+  if (current_section != IMPLICIT_SECTION){
+    print_error();
+    fprintf(stderr, ".origin can only be used before selecting an explicit section\n");
+    fprintf(stderr, "Move .origin directives before .text/.rodata/.data/.bss\n");
+    return false;
+  }
+
+  long imm;
+  if (!parse_constant_operand(".origin", "value", &imm)) return false;
+  uint32_t offset = sections[current_section].offset;
+  if (imm < (long)offset){
+    print_error();
+    fprintf(stderr, ".origin cannot be used to go backwards\n");
+    return false;
+  } else if (imm >= ((long)1 << 32)){
+    print_error();
+    fprintf(stderr, ".origin address must be a 32 bit integer\n");
+    return false;
+  }
+  emit_bytes(NULL, (uint32_t)imm - offset);
+  return true;
+}
+
+// Data-emitting directives: width and accepted range of each.
+struct FillDirective {
+  const char* name;
+  uint32_t bytes;
+  unsigned operand_flags;   // .fill also accepts labels (absolute address)
+  long min;                 // values from min to max are accepted, so both
+  long max;                 // signed and unsigned spellings fit
+  const char* missing;      // message when no operand is present
+  const char* range;        // message when the value does not fit
+};
+
+static const struct FillDirective kFill = {
+  ".fill", 4, OPERAND_DATA, -(1L << 31), (1L << 32) - 1,
+  "Invalid .fill immediate; expected integer literal, label, or .define constant",
+  ".fill immediate must fit in a 32-bit value",
+};
+static const struct FillDirective kFild = {
+  ".fild", 2, OPERAND_DEFINES, -(1L << 15), (1L << 16) - 1,
+  "Invalid .fild immediate; expected integer literal or .define constant",
+  ".fild immediate must fit in a 16-bit value",
+};
+static const struct FillDirective kFilb = {
+  ".filb", 1, OPERAND_DEFINES, -(1L << 7), (1L << 8) - 1,
+  "Invalid .filb immediate; expected integer literal or .define constant",
+  ".filb immediate must fit in an 8-bit value",
+};
+
+// .fill/.fild/.filb VALUE: emit VALUE little-endian in the directive's width.
+static bool handle_fill(const struct FillDirective* fill){
+  enum ConsumeResult result;
+  long imm = consume_operand(fill->operand_flags, fill->name, &result, NULL);
+  if (result != FOUND){
+    if (result == NOT_FOUND){
+      print_error();
+      fprintf(stderr, "%s\n", fill->missing);
+    }
+    return false;
+  }
+  if (!ensure_valid_section(fill->name)) return false;
+  if (!reject_in_bss(fill->name)) return false;
+  if (imm < fill->min || imm > fill->max){
+    print_error();
+    fprintf(stderr, "%s\n", fill->range);
+    return false;
+  }
+
+  if (pass_number == 2 && current_section == TEXT_SECTION){
+    char message[32];
+    snprintf(message, sizeof(message), "%s used in .text section", fill->name);
+    print_warning(message);
+  }
+  uint8_t bytes[4];
+  encode_value_bytes((uint32_t)imm, bytes, fill->bytes);
+  emit_bytes(bytes, fill->bytes);
+  return true;
+}
+
+// .space N: N zero bytes (only reserved, not emitted, in .bss).
+static bool handle_space(void){
+  long imm;
+  if (!parse_constant_operand(".space", "count", &imm)) return false;
+  if (!ensure_valid_section(".space")) return false;
+  if (imm < 0 || imm >= ((long)1 << 32)){
+    print_error();
+    fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
+    return false;
+  }
+  emit_bytes(NULL, (uint32_t)imm);
+  return true;
+}
+
+// .align N: zero-pad to the next multiple of N (a power of two).
+static bool handle_align(void){
+  uint32_t alignment = 0;
+  if (!parse_alignment(".align", &alignment)) return false;
+  if (!ensure_valid_section(".align")) return false;
+  uint32_t offset = sections[current_section].offset;
+  emit_bytes(NULL, align_up(offset, alignment) - offset);
+  return true;
+}
+
+// .line FILE N: map the next emitted address to a source line (for -g).
+static bool handle_line(void){
+  struct Slice filename;
+  if (!consume_filename(&filename)){
+    print_error();
+    fprintf(stderr, ".line directive requires a filename\n");
+    return false;
+  }
+  enum ConsumeResult result;
+  long line_num = consume_literal(&result);
+  if (result != FOUND){
+    print_error();
+    fprintf(stderr, ".line directive requires a line number\n");
+    return false;
+  }
+  if (pass_number == 2 && debug_info_list != NULL) {
+    add_debug_line(debug_info_list, &filename, (int)line_num, (uint32_t)pc);
+  }
+  return true;
+}
+
+// .local NAME BP_OFFSET SIZE: a source variable visible from the next address (for -g).
+static bool handle_local(void){
+  struct Slice varname;
+  if (!consume_identifier(&varname)){
+    print_error();
+    fprintf(stderr, ".local directive requires a variable name\n");
+    return false;
+  }
+  enum ConsumeResult result;
+  long bp_offset = consume_literal(&result);
+  if (result != FOUND){
+    print_error();
+    fprintf(stderr, ".local directive requires a bp offset\n");
+    return false;
+  }
+  long size_value = consume_literal(&result);
+  if (result != FOUND){
+    print_error();
+    fprintf(stderr, ".local directive requires a size in bytes\n");
+    return false;
+  }
+  if (size_value <= 0 || size_value > UINT32_MAX) {
+    print_error();
+    fprintf(stderr, ".local directive size must be a positive 32-bit value\n");
+    return false;
+  }
+  if (pass_number == 2 && debug_info_list != NULL) {
+    add_debug_local(debug_info_list, &varname, (int)bp_offset, (size_t)size_value, (uint32_t)pc);
+  }
+  return true;
+}
+
+// Switch the current section (.text/.rodata/.data/.bss).
+static bool select_section(enum UserSection section){
+  current_section = section;
+  update_pc();
+  return true;
+}
+
+// Handle the directive `dir`, whose keyword has already been consumed.
+static bool handle_directive(enum KeywordId dir){
+  switch (dir) {
+    case KW_DIR_GLOBAL: return handle_global();
+    case KW_DIR_ORIGIN: return handle_origin();
+    case KW_DIR_TEXT: return select_section(TEXT_SECTION);
+    case KW_DIR_RODATA: return select_section(RODATA_SECTION);
+    case KW_DIR_DATA: return select_section(DATA_SECTION);
+    case KW_DIR_BSS: return select_section(BSS_SECTION);
+    case KW_DIR_TEXT_LOAD: return parse_section_load_directive(TEXT_SECTION, ".text_load");
+    case KW_DIR_RODATA_LOAD: return parse_section_load_directive(RODATA_SECTION, ".rodata_load");
+    case KW_DIR_DATA_LOAD: return parse_section_load_directive(DATA_SECTION, ".data_load");
+    case KW_DIR_BSS_LOAD: return parse_section_load_directive(BSS_SECTION, ".bss_load");
+    case KW_DIR_FILL: return handle_fill(&kFill);
+    case KW_DIR_FILD: return handle_fill(&kFild);
+    case KW_DIR_FILB: return handle_fill(&kFilb);
+    case KW_DIR_SPACE: return handle_space();
+    case KW_DIR_ALIGN: return handle_align();
+    case KW_DIR_LINE: return handle_line();
+    case KW_DIR_LOCAL: return handle_local();
+    case KW_DIR_DEFINE:
+      // .define is evaluated once, in pass 1, so later labels are never seen.
+      // Pass 2 consumes the same tokens and ignores them; pass 1 already
+      // proved they resolve.
+      if (pass_number == 2) {
+        struct Slice name;
+        enum ConsumeResult result;
+        consume_identifier(&name);
+        consume_operand(OPERAND_DEFINES | OPERAND_LABELS, NULL, &result, NULL);
+        return true;
+      } else {
+        bool success = true;
+        record_define(&success);
+        return success;
+      }
+    default:
+      assert(!"take_keyword returned a non-directive id");
+      return false;
+  }
+}
+
+// Assemble one instruction into the current section.
+static bool handle_instruction(void){
+  if (!ensure_valid_section("instruction")) return false;
+  if (current_section == BSS_SECTION){
+    print_error();
+    fprintf(stderr, "Instructions not allowed in .bss section\n");
+    return false;
+  }
+  uint32_t offset = sections[current_section].offset;
+  if (offset % kWordBytes != 0){
+    print_error();
+    fprintf(stderr, "Instruction address must be %u-byte aligned; section offset is 0x%08X\n",
+            kWordBytes, offset);
+    return false;
+  }
+
+  update_pc();
+  enum ConsumeResult result = FOUND;
+  int instruction = consume_instruction(&result);
+  if (result == ERROR) return false;
+  if (result == NOT_FOUND) {
+    print_error();
+    fprintf(stderr, "Unrecognized instruction\n");
+    return false;
+  }
+
+  if (pass_number == 2){
+    if (current_section == RODATA_SECTION){
+      print_warning("Instruction emitted in .rodata section");
+    } else if (current_section == DATA_SECTION){
+      print_warning("Instruction emitted in .data section");
+    }
+  }
+  emit_word(instruction);
+  return true;
+}
+
+// Run the current pass over one preprocessed file. prog follows the NUL
+// sentinel the preprocessor puts before every buffer.
+static bool assemble_file(char const* const prog){
   current = prog;
   current_buffer_start = prog - 1;
   line_count = 1;
 
+  while (!is_at_end()){
+    if (pass_number == 2 && pc > ((unsigned long)1 << 32)){
+      print_error();
+      fprintf(stderr, "Program does not fit in 32-bit address space\n");
+      return false;
+    }
+
+    struct Slice label;
+    if (consume_label(&label)) {
+      if (!handle_label(&label)) return false;
+      continue;
+    }
+
+    skip();
+    // One lookup classifies the directive. The token stays put when it is not one.
+    enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
+    bool ok = (dir != KW_NONE) ? handle_directive(dir) : handle_instruction();
+    if (!ok) return false;
+  }
+  return true;
+}
+
+// Create this file's symbol tables and seed them with -D definitions.
+static bool create_file_symbols(char const* const prog){
   // Bucket counts track source size. Compiler output is roughly one label per
   // few dozen bytes; .define names and per-file .global sets stay small, so
   // those tables do not need a thousand empty buckets each.
@@ -548,12 +817,10 @@ bool process_labels(char const* const prog){
     kLabelBytesPerBucket = 48,
     kSparseSymbolBuckets = 32
   };
-  size_t src_len = 0;
-  while (prog[src_len] != '\0') src_len++;
-  size_t label_buckets = kMinLabelBuckets;
-  size_t label_need = src_len / kLabelBytesPerBucket;
+  size_t label_need = strlen(prog) / kLabelBytesPerBucket;
   if (label_need < kMinLabelBuckets) label_need = kMinLabelBuckets;
   if (label_need > kMaxLabelBuckets) label_need = kMaxLabelBuckets;
+  size_t label_buckets = kMinLabelBuckets;
   while (label_buckets < label_need) label_buckets *= 2;
 
   local_labels[current_file_index] = create_hash_map(label_buckets);
@@ -564,602 +831,126 @@ bool process_labels(char const* const prog){
       local_globals[current_file_index] == NULL) {
     return false;
   }
-  if (!apply_cli_defines()) return false;
+  return apply_cli_defines();
+}
 
-  while (!is_at_end()){
+// Run one pass over every file in order. Section and pc state carry over
+// from one file to the next, so a file continues in the previous file's section.
+static bool run_pass(int pass, int num_files, const char* const* names, char** files){
+  pass_number = pass;
+  current_section = is_kernel ? IMPLICIT_SECTION : NO_SECTION;
+  for (int i = 0; i < SECTION_COUNT; ++i) sections[i].offset = 0;
+  pc = (pass == 1) ? 0 : sections[is_kernel ? IMPLICIT_SECTION : TEXT_SECTION].load_base;
 
-    struct Slice label;
-    if (consume_label(&label)) {
-      if (!ensure_valid_section("label")) return false;
-      long label_value = (long)encode_section_offset(current_section, section_offsets[current_section]);
-
-      // check for duplicates
-      if (hash_map_contains(local_labels[current_file_index], &label)){
-        if (label_has_definition(local_labels[current_file_index], &label)){
-          // duplicate label error
-          print_error();
-          fprintf(stderr, "Duplicate label\n");
-          return false;
-        } else {
-          make_defined(local_labels[current_file_index], &label, label_value);
-        }
-      } else {
-        hash_map_insert(local_labels[current_file_index], &label, label_value, true, current_section != TEXT_SECTION);
-      }
-
-      // Check for duplicates on globals explicitly declared in this file.
-      if (hash_map_contains(local_globals[current_file_index], &label)){
-        if (label_has_definition(global_labels, &label)){
-          // duplicate label error
-          print_error();
-          fprintf(stderr, "Duplicate global label\n");
-          return false;
-        } else {
-          make_defined(global_labels, &label, label_value);
-        }
-      }
-
-    } else {
-      skip();
-      // One lookup classifies the directive. The token stays put when it is not one.
-      enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
-      if ((dir == KW_DIR_GLOBAL)) {
-        struct Slice label;
-        if (consume_identifier(&label)){
-          // Track per-file global declarations to detect duplicate exports.
-          if (!hash_map_contains(local_globals[current_file_index], &label)){
-            hash_map_insert(local_globals[current_file_index], &label, 0, false,
-              current_section != TEXT_SECTION); // mark as data if not in text section
-          }
-          if (!hash_map_contains(global_labels, &label)){
-            hash_map_insert(global_labels, &label, 0, false, current_section != TEXT_SECTION);
-          }
-
-          if (label_has_definition(local_labels[current_file_index], &label)){
-            if (label_has_definition(global_labels, &label)){
-              print_error();
-              fprintf(stderr, "Duplicate global label\n");
-              return false;
-            }
-            make_defined(global_labels, &label, hash_map_get(local_labels[current_file_index], &label));
-          }
-        } else {
-          print_error();
-          fprintf(stderr, ".global directive requires a label\n");
-          return false;
-        }
-
-        continue;
-      } else if ((dir == KW_DIR_ORIGIN)) { 
-        if (!is_kernel){
-          print_error();
-          fprintf(stderr, ".origin can only be used in kernel mode\n");
-          return false;
-        }
-        if (current_section != IMPLICIT_SECTION){
-          print_error();
-          fprintf(stderr, ".origin can only be used before selecting an explicit section\n");
-          fprintf(stderr, "Move .origin directives before .text/.rodata/.data/.bss\n");
-          return false;
-        }
-
-        enum ConsumeResult result;
-        long imm = consume_constant(&result, ".origin");
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .origin value; expected integer literal or .define constant\n");
-          }
-          return false;
-        }
-        if (imm < (long)section_offsets[current_section]){
-          print_error();
-          fprintf(stderr, ".origin cannot be used to go backwards\n");
-          return false;
-        } else if (imm >= ((long)1 << 32)){
-          print_error();
-          fprintf(stderr, ".origin address must be a 32 bit integer\n");
-          return false;
-        }
-        section_offsets[current_section] = (uint32_t)imm;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_TEXT)) {
-        current_section = TEXT_SECTION;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_RODATA)) {
-        current_section = RODATA_SECTION;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_DATA)) {
-        current_section = DATA_SECTION;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_BSS)) {
-        current_section = BSS_SECTION;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_TEXT_LOAD)) {
-        if (!parse_section_load_directive(TEXT_SECTION, ".text_load")) return false;
-        continue;
-      }
-      else if ((dir == KW_DIR_RODATA_LOAD)) {
-        if (!parse_section_load_directive(RODATA_SECTION, ".rodata_load")) return false;
-        continue;
-      }
-      else if ((dir == KW_DIR_DATA_LOAD)) {
-        if (!parse_section_load_directive(DATA_SECTION, ".data_load")) return false;
-        continue;
-      }
-      else if ((dir == KW_DIR_BSS_LOAD)) {
-        if (!parse_section_load_directive(BSS_SECTION, ".bss_load")) return false;
-        continue;
-      }
-      else if ((dir == KW_DIR_FILL)) {
-        enum ConsumeResult result; 
-        consume_operand(OPERAND_DATA, ".fill", &result, NULL);
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .fill immediate; expected integer literal, label, or .define constant\n");
-          }
-          return false;
-        }
-        if (!ensure_valid_section(".fill")) return false;
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".fill not allowed in .bss section\n");
-          return false;
-        }
-        section_offsets[current_section] += kWordBytes;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_FILD)) {
-        enum ConsumeResult result; 
-        consume_constant(&result, ".fild");
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .fild immediate; expected integer literal or .define constant\n");
-          }
-          return false;
-        }
-        if (!ensure_valid_section(".fild")) return false;
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".fild not allowed in .bss section\n");
-          return false;
-        }
-        section_offsets[current_section] += kHalfBytes;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_FILB)) {
-        enum ConsumeResult result; 
-        consume_constant(&result, ".filb");
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .filb immediate; expected integer literal or .define constant\n");
-          }
-          return false;
-        }
-        if (!ensure_valid_section(".filb")) return false;
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".filb not allowed in .bss section\n");
-          return false;
-        }
-        section_offsets[current_section] += kByteBytes;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_SPACE)) { 
-        enum ConsumeResult result; 
-        long imm = consume_constant(&result, ".space");
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .space count; expected integer literal or .define constant\n");
-          }
-          return false;
-        }
-        if (!ensure_valid_section(".space")) return false;
-        section_offsets[current_section] += imm;
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_ALIGN)) {
-        enum ConsumeResult result;
-        uint32_t alignment = 0;
-        if (!parse_alignment(&result, ".align", &alignment)) return false;
-        if (!ensure_valid_section(".align")) return false;
-        section_offsets[current_section] =
-          align_up(section_offsets[current_section], alignment);
-        pc = section_offsets[current_section];
-        continue;
-      }
-      else if ((dir == KW_DIR_DEFINE)) {
-        bool success = true;
-        record_define(&success);
-        if (!success) return false;
-        continue;
-      }
-      else if ((dir == KW_DIR_LINE)) {
-        // handled in second pass
-        skip_line();
-        continue;
-      }
-      else if ((dir == KW_DIR_LOCAL)) {
-        // handled in second pass
-        skip_line();
-        continue;
-      }
-      
-      enum ConsumeResult result = FOUND;
-      if (!ensure_valid_section("instruction")) return false;
-      if (current_section == BSS_SECTION){
-        print_error();
-        fprintf(stderr, "Instructions not allowed in .bss section\n");
-        return false;
-      }
-      if (section_offsets[current_section] % kWordBytes != 0){
-        return report_instruction_alignment_error(section_offsets[current_section], "section offset");
-      }
-      consume_instruction(&result);
-      if (result == ERROR) return false;
-      if (result == NOT_FOUND) {
-        print_error();
-        fprintf(stderr, "Unrecognized instruction\n");
-        return false;
-      }
-      section_offsets[current_section] += kWordBytes;
-      pc = section_offsets[current_section];
-    }
+  for (int i = 0; i < num_files; ++i){
+    current_file_index = i;
+    current_file = names[i];
+    if (pass == 1 && !create_file_symbols(files[i] + 1)) return false;
+    if (!assemble_file(files[i] + 1)) return false;
   }
   return true;
 }
 
-// Second pass to emit instruction/data bytes into output sections.
-// Returns true on success; appends words to instruction arrays and updates bss_size.
-bool to_binary(char const* const prog, struct InstructionArrayList* instructions){
-  current = prog;
-  current_buffer_start = prog - 1;
-  line_count = 1;
+// ---- Layout ---------------------------------------------------------------
 
-  enum ConsumeResult success = FOUND;
-
-  while (success == FOUND){
-    // consume any labels, they were already dealt with
-    struct Slice defined_label;
-    while (skip_newline(), consume_label(&defined_label));
-    skip_newline();
-
-    if (pc > ((long)1 << 32)){
-      print_error();
-      fprintf(stderr, "Program does not fit in 32-bit address space\n");
-      return false;
+// Assign section addresses from the sizes measured in pass 1, then rewrite
+// every label from a packed section offset to its absolute address.
+static void layout_sections(int num_files){
+  if (!is_kernel){
+    // ELF segments: text at USER_BASE_ADDR, rodata and data each on the next
+    // page, .bss directly after .data. elf.c's create_PHT uses the same rule.
+    for (int i = TEXT_SECTION; i <= DATA_SECTION; ++i){
+      sections[i].size = align_up(sections[i].offset, kWordBytes);
     }
-
-    // directives
-    enum KeywordId dir = take_keyword(KW_CLASS_DIRECTIVE);
-    if ((dir == KW_DIR_GLOBAL)) {
-      // handled in first pass
-      struct Slice name;
-      if (!consume_identifier(&name)){
-        print_error();
-        fprintf(stderr, ".global directive requires a label\n");
-        return false;
-      }
-      if (!label_has_definition(global_labels, &name)){
-        print_error();
-        fprintf(stderr, "Global label \"");
-        print_slice_err(&name);
-        fprintf(stderr, "\" missing from first pass\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_DEFINE)){
-      skip_line();
-    } // handled in first pass
-    else if ((dir == KW_DIR_ORIGIN)) { 
-      if (is_kernel){
-        enum ConsumeResult result;
-        long imm = consume_constant(&result, ".origin");
-        if (result != FOUND){
-          if (result == NOT_FOUND){
-            print_error();
-            fprintf(stderr, "Invalid .origin value; expected integer literal or .define constant\n");
-          }
-          return false;
-        }
-        if (current_section != IMPLICIT_SECTION){
-          print_error();
-          fprintf(stderr, ".origin can only be used before selecting an explicit section\n");
-          fprintf(stderr, "Move .origin directives before .text/.rodata/.data/.bss\n");
-          return false;
-        }
-        if (imm < (long)section_offsets[current_section]){
-          print_error();
-          fprintf(stderr, ".origin cannot be used to go backwards\n");
-          return false;
-        } else if (imm >= ((long)1 << 32)){
-          print_error();
-          fprintf(stderr, ".origin address must be a 32 bit integer\n");
-          return false;
-        }
-        uint32_t target = (uint32_t)imm;
-        uint32_t current = section_offsets[current_section];
-        uint32_t pad = target - current;
-        append_zero_bytes_user(section_arrays[current_section], pad, current_section);
-        pc = section_pc_base(current_section) + section_offsets[current_section];
-      } else {
-        print_error();
-        fprintf(stderr, ".origin can only be used in kernel mode\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_TEXT)) {
-      current_section = TEXT_SECTION;
-      pc = section_pc_base(current_section) + section_offsets[current_section];
-    }
-    else if ((dir == KW_DIR_RODATA)) {
-      current_section = RODATA_SECTION;
-      pc = section_pc_base(current_section) + section_offsets[current_section];
-    }
-    else if ((dir == KW_DIR_DATA)) {
-      current_section = DATA_SECTION;
-      pc = section_pc_base(current_section) + section_offsets[current_section];
-    }
-    else if ((dir == KW_DIR_BSS)) {
-      current_section = BSS_SECTION;
-      pc = section_pc_base(current_section) + section_offsets[current_section];
-    }
-    else if ((dir == KW_DIR_TEXT_LOAD)) {
-      if (!parse_section_load_directive(TEXT_SECTION, ".text_load")) return false;
-    }
-    else if ((dir == KW_DIR_RODATA_LOAD)) {
-      if (!parse_section_load_directive(RODATA_SECTION, ".rodata_load")) return false;
-    }
-    else if ((dir == KW_DIR_DATA_LOAD)) {
-      if (!parse_section_load_directive(DATA_SECTION, ".data_load")) return false;
-    }
-    else if ((dir == KW_DIR_BSS_LOAD)) {
-      if (!parse_section_load_directive(BSS_SECTION, ".bss_load")) return false;
-    }
-    else if ((dir == KW_DIR_FILL)) {
-      enum ConsumeResult result; 
-      long imm = consume_operand(OPERAND_DATA, ".fill", &result, NULL);
-      if (result != FOUND){
-        if (result == NOT_FOUND){
-          print_error();
-          fprintf(stderr, "Invalid .fill immediate; expected integer literal, label, or .define constant\n");
-        }
-        return false;
-      }
-      if (imm >= -((long)1 << 31) && imm < ((long)1 << 32)){
-        uint32_t value = (uint32_t)imm;
-        uint8_t bytes[kWordBytes];
-        encode_value_bytes(value, bytes, kWordBytes);
-        if (!ensure_valid_section(".fill")) return false;
-        if (current_section == TEXT_SECTION){
-          print_warning(".fill used in .text section");
-        }
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".fill not allowed in .bss section\n");
-          return false;
-        }
-        append_bytes_user(section_arrays[current_section], bytes, kWordBytes, current_section);
-      } else {
-        print_error();
-        fprintf(stderr, ".fill immediate must fit in a 32-bit value\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_FILD)) {
-      enum ConsumeResult result; 
-      long imm = consume_constant(&result, ".fild");
-      if (result != FOUND){
-        if (result == NOT_FOUND){
-          print_error();
-          fprintf(stderr, "Invalid .fild immediate; expected integer literal or .define constant\n");
-        }
-        return false;
-      }
-      if (imm >= -((long)1 << 15) && imm < ((long)1 << 16)){
-        uint16_t value = (uint16_t)imm;
-        if (!ensure_valid_section(".fild")) return false;
-        if (current_section == TEXT_SECTION){
-          print_warning(".fild used in .text section");
-        }
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".fild not allowed in .bss section\n");
-          return false;
-        }
-        uint8_t bytes[kHalfBytes];
-        encode_value_bytes(value, bytes, kHalfBytes);
-        append_bytes_user(section_arrays[current_section], bytes, kHalfBytes, current_section);
-      } else {
-        print_error();
-        fprintf(stderr, ".fild immediate must fit in a 16-bit value\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_FILB)) {
-      enum ConsumeResult result; 
-      long imm = consume_constant(&result, ".filb");
-      if (result != FOUND){
-        if (result == NOT_FOUND){
-          print_error();
-          fprintf(stderr, "Invalid .filb immediate; expected integer literal or .define constant\n");
-        }
-        return false;
-      }
-      if (imm >= -((long)1 << 7) && imm < ((long)1 << 8)){
-        uint8_t value = (uint8_t)imm;
-        if (!ensure_valid_section(".filb")) return false;
-        if (current_section == TEXT_SECTION){
-          print_warning(".filb used in .text section");
-        }
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, ".filb not allowed in .bss section\n");
-          return false;
-        }
-        append_bytes_user(section_arrays[current_section], &value, kByteBytes, current_section);
-      } else {
-        print_error();
-        fprintf(stderr, ".filb immediate must fit in an 8-bit value\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_SPACE)) { 
-      enum ConsumeResult result; 
-      long imm = consume_constant(&result, ".space");
-      if (result != FOUND){
-        if (result == NOT_FOUND){
-          print_error();
-          fprintf(stderr, "Invalid .space count; expected integer literal or .define constant\n");
-        }
-        return false;
-      }
-      if (0 <= imm && imm < ((long)1 << 32)){
-        if (!ensure_valid_section(".space")) return false;
-        if (current_section == BSS_SECTION){
-          bss_size += (uint32_t)imm;
-          section_offsets[current_section] += (uint32_t)imm;
-          pc = section_pc_base(current_section) + section_offsets[current_section];
-        } else {
-          append_zero_bytes_user(section_arrays[current_section], (uint32_t)imm, current_section);
-        }
-      } else {
-        print_error();
-        fprintf(stderr, ".space immediate must be a positive 32 bit integer\n");
-        return false;
-      }
-    }
-    else if ((dir == KW_DIR_LINE)) {
-      // Parse filename and line number; record the address of the next instruction.
-      struct Slice filename;
-      if (!consume_filename(&filename)){
-        print_error();
-        fprintf(stderr, ".line directive requires a filename\n");
-        return false;
-      }
-      enum ConsumeResult result;
-      long line_num = consume_literal(&result);
-      if (result != FOUND){
-        print_error();
-        fprintf(stderr, ".line directive requires a line number\n");
-        return false;
-      }
-      if (debug_info_list != NULL) {
-        add_debug_line(debug_info_list, &filename, line_num, (uint32_t)pc);
-      }
-    }
-    else if ((dir == KW_DIR_LOCAL)) {
-      // Parse name and bp offset; record the address where locals become visible.
-      struct Slice varname;
-      if (!consume_identifier(&varname)){
-        print_error();
-        fprintf(stderr, ".local directive requires a variable name\n");
-        return false;
-      }
-      enum ConsumeResult result;
-      long bp_offset = consume_literal(&result);
-      if (result != FOUND){
-        print_error();
-        fprintf(stderr, ".local directive requires a bp offset\n");
-        return false;
-      }
-      long size_value = consume_literal(&result);
-      if (result != FOUND){
-        print_error();
-        fprintf(stderr, ".local directive requires a size in bytes\n");
-        return false;
-      }
-      if (size_value <= 0 || size_value > UINT32_MAX) {
-        print_error();
-        fprintf(stderr, ".local directive size must be a positive 32-bit value\n");
-        return false;
-      }
-      if (debug_info_list != NULL) {
-        add_debug_local(debug_info_list, &varname, bp_offset, (size_t)size_value, (uint32_t)pc);
-      }
-    }
-    else if ((dir == KW_DIR_ALIGN)) {
-      enum ConsumeResult result;
-      uint32_t alignment = 0;
-      if (!parse_alignment(&result, ".align", &alignment)) return false;
-
-      if (!ensure_valid_section(".align")) return false;
-      uint32_t current = section_offsets[current_section];
-      uint32_t aligned = align_up(current, alignment);
-      uint32_t pad = aligned - current;
-      if (current_section == BSS_SECTION){
-        bss_size += pad;
-        section_offsets[current_section] += pad;
-        pc = section_pc_base(current_section) + section_offsets[current_section];
-      } else {
-        append_zero_bytes_user(section_arrays[current_section], pad, current_section);
-      }
-      continue;
-    } else {
-      if (!ensure_valid_section("instruction")) return false;
-      pc = section_pc_base(current_section) + section_offsets[current_section];
-      int instruction = consume_instruction(&success);
-      if (success == FOUND) {
-        if (current_section == BSS_SECTION){
-          print_error();
-          fprintf(stderr, "Instructions not allowed in .bss section\n");
-          return false;
-        }
-        if (section_offsets[current_section] % kWordBytes != 0){
-          return report_instruction_alignment_error((uint32_t)pc, "pc");
-        }
-        if (current_section == RODATA_SECTION){
-          print_warning("Instruction emitted in .rodata section");
-        } else if (current_section == DATA_SECTION){
-          print_warning("Instruction emitted in .data section");
-        }
-        instruction_array_append(section_arrays[current_section], instruction);
-        section_offsets[current_section] += kWordBytes;
-        pc = section_pc_base(current_section) + section_offsets[current_section];
-      }
-      else if (success == ERROR) return false;
+    sections[BSS_SECTION].size = sections[BSS_SECTION].offset;
+    sections[TEXT_SECTION].base = USER_BASE_ADDR;
+    sections[RODATA_SECTION].base = align_up(sections[TEXT_SECTION].base + sections[TEXT_SECTION].size, SECTION_ALIGN);
+    sections[DATA_SECTION].base = align_up(sections[RODATA_SECTION].base + sections[RODATA_SECTION].size, SECTION_ALIGN);
+    sections[BSS_SECTION].base = sections[DATA_SECTION].base + sections[DATA_SECTION].size;
+  } else {
+    // Kernel image: implicit, text, rodata, data, bss, end, each padded to
+    // a 512-byte block. The end section holds one sentinel word.
+    for (int i = 0; i < SECTION_COUNT; ++i) sections[i].size = sections[i].offset;
+    sections[END_SECTION].size = kWordBytes;
+    static const enum UserSection kKernelOrder[] = {
+      IMPLICIT_SECTION, TEXT_SECTION, RODATA_SECTION, DATA_SECTION, BSS_SECTION, END_SECTION,
+    };
+    uint32_t cursor = 0;
+    for (size_t i = 0; i < sizeof(kKernelOrder) / sizeof(kKernelOrder[0]); ++i){
+      struct Section* sec = &sections[kKernelOrder[i]];
+      sec->base = cursor;
+      cursor += align_up(sec->size, kKernelSectionAlign);
     }
   }
 
-  if (!is_at_end()) {
-    print_error();
-    fprintf(stderr, "Unrecognized instruction\n");
-    return false;
+  // Runtime addresses default to image addresses unless a *_load directive
+  // moved the section. With .bss_load, the end section follows the padded .bss.
+  for (int i = 0; i < SECTION_COUNT; ++i){
+    if (!sections[i].load_set) sections[i].load_base = sections[i].base;
+  }
+  if (is_kernel && sections[BSS_SECTION].load_set){
+    sections[END_SECTION].load_base =
+      sections[BSS_SECTION].load_base + align_up(sections[BSS_SECTION].size, kKernelSectionAlign);
   }
 
-  return true;
+  for (int i = 0; i < num_files; ++i) adjust_label_map_for_sections(local_labels[i]);
+  adjust_label_map_for_sections(global_labels);
 }
+
+// Create the pass 2 section images in output order. Capacities come from the
+// pass 1 sizes so the arrays never regrow; .bss is never materialized.
+static struct InstructionArrayList* create_section_images(void){
+  static const enum UserSection kUserImages[] = { TEXT_SECTION, RODATA_SECTION, DATA_SECTION };
+  static const enum UserSection kKernelImages[] = {
+    IMPLICIT_SECTION, TEXT_SECTION, RODATA_SECTION, DATA_SECTION, BSS_SECTION, END_SECTION,
+  };
+  const enum UserSection* order = is_kernel ? kKernelImages : kUserImages;
+  size_t count = is_kernel ? sizeof(kKernelImages) / sizeof(kKernelImages[0])
+                           : sizeof(kUserImages) / sizeof(kUserImages[0]);
+
+  struct InstructionArrayList* list = create_instruction_array_list();
+  for (size_t i = 0; i < count; ++i){
+    struct Section* sec = &sections[order[i]];
+    size_t words = (order[i] == BSS_SECTION) ? 1 : (sec->size + kWordBytes - 1) / kWordBytes;
+    if (words == 0) words = 1;
+    sec->words = create_instruction_array(words, (int)sec->base);
+    if (sec->words == NULL){
+      fprintf(stderr, "Assembler: failed to allocate %zu words for section image at 0x%08X\n",
+              words, sec->base);
+      destroy_instruction_array_list(list);
+      return NULL;
+    }
+    instruction_array_list_append(list, sec->words);
+  }
+  return list;
+}
+
+// ---- Driver ---------------------------------------------------------------
 
 // Append labels from a definition map to the output label list.
-static void append_labels_from_map(struct HashMap* map, struct LabelList* labels, uint32_t offset){
+static void append_labels_from_map(struct HashMap* map, struct LabelList* labels){
   for (size_t i = 0; i < map->size; ++i){
-    struct HashEntry* entry = map->arr[i];
-    while (entry != NULL){
+    for (struct HashEntry* entry = map->arr[i]; entry != NULL; entry = entry->next){
       if (entry->is_defined){
-        uint32_t addr = (uint32_t)(entry->value + offset);
-        label_list_append(labels, entry->key.start, entry->key.len, addr, entry->is_data);
+        label_list_append(labels, entry->key.start, entry->key.len, (uint32_t)entry->value, entry->is_data);
       }
-      entry = entry->next;
     }
   }
+}
+
+// Free every symbol table. Tables that were never created are NULL.
+static void destroy_symbol_tables(int num_files){
+  for (int j = 0; j < num_files; ++j){
+    if (local_labels != NULL) destroy_hash_map(local_labels[j]);
+    if (local_defines != NULL) destroy_hash_map(local_defines[j]);
+    if (local_globals != NULL) destroy_hash_map(local_globals[j]);
+  }
+  free(local_labels);
+  free(local_defines);
+  free(local_globals);
+  destroy_hash_map(global_labels);
+  local_labels = local_defines = local_globals = NULL;
+  global_labels = NULL;
 }
 
 // assemble an entire program
@@ -1168,215 +959,75 @@ struct ProgramDescriptor* assemble(int num_files, int* file_names, bool kernel,
   struct DebugInfoList** labels_out_c){
 
   is_kernel = kernel;
-  pass_number = 1;
-  current_section = is_kernel ? IMPLICIT_SECTION : NO_SECTION;
-  text_instruction_array = NULL;
-  rodata_instruction_array = NULL;
-  data_instruction_array = NULL;
-  for (int i = 0; i < SECTION_COUNT; ++i) section_arrays[i] = NULL;
-  bss_size = 0;
-  reset_section_offsets();
-  reset_section_load_bases();
-  for (int i = 0; i < SECTION_COUNT; ++i) section_sizes[i] = 0;
-  for (int i = 0; i < SECTION_COUNT; ++i) section_bases[i] = 0;
+  memset(sections, 0, sizeof(sections));
+  if (labels_out != NULL) *labels_out = NULL;
+  if (labels_out_c != NULL) *labels_out_c = NULL;
 
   // Source-line records are only retained when the caller asked for -g output.
   debug_info_list = (labels_out_c != NULL) ? create_debug_info_list() : NULL;
 
-  if (labels_out != NULL) *labels_out = NULL;
-  if (labels_out_c != NULL) *labels_out_c = NULL;
-
-  current_file_index = 0;
-
-  local_labels = malloc(num_files * sizeof(struct HashMap*));
-  local_defines = malloc(num_files * sizeof(struct HashMap*));
-  local_globals = malloc(num_files * sizeof(struct HashMap*));
-
+  const char** names = malloc((size_t)num_files * sizeof(*names));
+  local_labels = calloc((size_t)num_files, sizeof(struct HashMap*));
+  local_defines = calloc((size_t)num_files, sizeof(struct HashMap*));
+  local_globals = calloc((size_t)num_files, sizeof(struct HashMap*));
   // Shared export table. Kernel images export more symbols than any one file.
   enum { kGlobalSymbolBuckets = 4096 };
   global_labels = create_hash_map(kGlobalSymbolBuckets);
-  if (global_labels == NULL) {
-    free(local_labels);
-    free(local_defines);
-    free(local_globals);
-    destroy_debug_info_list(debug_info_list);
-    debug_info_list = NULL;
-    return NULL;
-  }
-  pc = 0;
-  for (int i = 0; i < num_files; ++i){
-    current_file_index = i;
-    current_file = argv[file_names[i]];
-    if (!process_labels(files[i] + 1)) {
-      for (int j = 0; j <= i; ++j) destroy_hash_map(local_labels[j]);
-      for (int j = 0; j <= i; ++j) destroy_hash_map(local_defines[j]);
-      for (int j = 0; j <= i; ++j) destroy_hash_map(local_globals[j]);
-      free(local_labels);
-      free(local_defines);
-      free(local_globals);
-      destroy_hash_map(global_labels);
-      destroy_debug_info_list(debug_info_list);
-      debug_info_list = NULL;
-      return NULL;
-    }
-  }
 
-  if (!is_kernel){
-    section_sizes[TEXT_SECTION] = align_up(section_offsets[TEXT_SECTION], kWordBytes);
-    section_sizes[RODATA_SECTION] = align_up(section_offsets[RODATA_SECTION], kWordBytes);
-    section_sizes[DATA_SECTION] = align_up(section_offsets[DATA_SECTION], kWordBytes);
-    section_sizes[BSS_SECTION] = section_offsets[BSS_SECTION];
-    compute_section_bases();
-  } else {
-    for (int i = 0; i < SECTION_COUNT; ++i){
-      section_sizes[i] = section_offsets[i];
-    }
-    section_sizes[END_SECTION] = kWordBytes;
-    compute_kernel_section_bases();
+  struct InstructionArrayList* images = NULL;
+  struct ProgramDescriptor* program = NULL;
+  uint32_t entry_point = 0;
+  if (names == NULL || local_labels == NULL || local_defines == NULL ||
+      local_globals == NULL || global_labels == NULL) {
+    fprintf(stderr, "Assembler: failed to allocate symbol tables for %d files\n", num_files);
+    goto done;
   }
+  for (int i = 0; i < num_files; ++i) names[i] = argv[file_names[i]];
 
-  finalize_section_load_bases();
-
-  for (int i = 0; i < num_files; ++i) adjust_label_map_for_sections(local_labels[i]);
-  adjust_label_map_for_sections(global_labels);
+  if (!run_pass(1, num_files, names, files)) goto done;
+  layout_sections(num_files);
 
   if (!is_kernel){
     struct Slice start_label = {"_start", 6};
     if (!label_has_definition(global_labels, &start_label)){
       fprintf(stderr, "Missing global label _start\n");
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-      free(local_labels);
-      free(local_defines);
-      free(local_globals);
-      destroy_hash_map(global_labels);
-      destroy_debug_info_list(debug_info_list);
-      debug_info_list = NULL;
-      return NULL;
+      goto done;
     }
     entry_point = (uint32_t)hash_map_get(global_labels, &start_label);
   }
 
-  pass_number = 2;
-
-  struct InstructionArrayList* instructions = create_instruction_array_list();
-
-  // Pass 1 already measured each section. Allocate the word buffer once instead
-  // of doubling from a 10-word seed. .bss is not materialized as bytes.
-  if (is_kernel){
-    if (!reserve_instruction_words(instructions->head, section_word_capacity(IMPLICIT_SECTION))) {
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-      free(local_labels);
-      free(local_defines);
-      free(local_globals);
-      destroy_hash_map(global_labels);
-      destroy_instruction_array_list(instructions);
-      destroy_debug_info_list(debug_info_list);
-      debug_info_list = NULL;
-      return NULL;
-    }
-    instructions->head->origin = section_bases[IMPLICIT_SECTION];
-    section_arrays[IMPLICIT_SECTION] = instructions->head;
-    struct InstructionArray* arr_text = create_instruction_array(section_word_capacity(TEXT_SECTION), section_bases[TEXT_SECTION]);
-    struct InstructionArray* arr_rodata = create_instruction_array(section_word_capacity(RODATA_SECTION), section_bases[RODATA_SECTION]);
-    struct InstructionArray* arr_data = create_instruction_array(section_word_capacity(DATA_SECTION), section_bases[DATA_SECTION]);
-    struct InstructionArray* arr_bss = create_instruction_array(1, section_bases[BSS_SECTION]);
-    struct InstructionArray* arr_end = create_instruction_array(section_word_capacity(END_SECTION), section_bases[END_SECTION]);
-    instruction_array_list_append(instructions, arr_text);
-    instruction_array_list_append(instructions, arr_rodata);
-    instruction_array_list_append(instructions, arr_data);
-    instruction_array_list_append(instructions, arr_bss);
-    instruction_array_list_append(instructions, arr_end);
-    section_arrays[TEXT_SECTION] = arr_text;
-    section_arrays[RODATA_SECTION] = arr_rodata;
-    section_arrays[DATA_SECTION] = arr_data;
-    section_arrays[BSS_SECTION] = arr_bss;
-    section_arrays[END_SECTION] = arr_end;
-  } else {
-    text_instruction_array = instructions->head;
-    if (!reserve_instruction_words(text_instruction_array, section_word_capacity(TEXT_SECTION))) {
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-      free(local_labels);
-      free(local_defines);
-      free(local_globals);
-      destroy_hash_map(global_labels);
-      destroy_instruction_array_list(instructions);
-      destroy_debug_info_list(debug_info_list);
-      debug_info_list = NULL;
-      return NULL;
-    }
-    text_instruction_array->origin = section_bases[TEXT_SECTION];
-    rodata_instruction_array = create_instruction_array(section_word_capacity(RODATA_SECTION), section_bases[RODATA_SECTION]);
-    data_instruction_array = create_instruction_array(section_word_capacity(DATA_SECTION), section_bases[DATA_SECTION]);
-    instruction_array_list_append(instructions, rodata_instruction_array);
-    instruction_array_list_append(instructions, data_instruction_array);
-    section_arrays[TEXT_SECTION] = text_instruction_array;
-    section_arrays[RODATA_SECTION] = rodata_instruction_array;
-    section_arrays[DATA_SECTION] = data_instruction_array;
-  }
-
-  reset_section_offsets();
-  current_section = is_kernel ? IMPLICIT_SECTION : NO_SECTION;
-  bss_size = 0;
-  pc = is_kernel ? section_pc_base(IMPLICIT_SECTION) : section_pc_base(TEXT_SECTION);
-  for (int i = 0; i < num_files; ++i){
-    current_file_index = i;
-    current_file = argv[file_names[i]];
-    if (!to_binary(files[i] + 1, instructions)){
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-      for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-      free(local_labels);
-      free(local_defines);
-      free(local_globals);
-      destroy_hash_map(global_labels);
-      destroy_instruction_array_list(instructions);
-      destroy_debug_info_list(debug_info_list);
-      debug_info_list = NULL;
-      return NULL;
-    }
-  }
+  images = create_section_images();
+  if (images == NULL || !run_pass(2, num_files, names, files)) goto done;
 
   if (is_kernel){
-    uint32_t sentinel = 0xAAAAAAAAu;
-    uint8_t bytes[kWordBytes];
-    encode_value_bytes(sentinel, bytes, kWordBytes);
-    append_bytes_user(section_arrays[END_SECTION], bytes, kWordBytes, END_SECTION);
+    current_section = END_SECTION;
+    uint8_t bytes[4];
+    encode_value_bytes(kKernelEndSentinel, bytes, kWordBytes);
+    emit_bytes(bytes, kWordBytes);
   }
 
   if (labels_out != NULL){
     struct LabelList* labels = create_label_list(128);
-    uint32_t offset = 0;
-    for (int j = 0; j < num_files; ++j) {
-      append_labels_from_map(local_labels[j], labels, offset);
-    }
+    for (int j = 0; j < num_files; ++j) append_labels_from_map(local_labels[j], labels);
     *labels_out = labels;
   }
 
-  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_labels[j]);
-  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_defines[j]);
-  for (int j = 0; j < num_files; ++j) destroy_hash_map(local_globals[j]);
-  free(local_labels);
-  free(local_defines);
-  free(local_globals);
-  destroy_hash_map(global_labels);
-
-  struct ProgramDescriptor* program = malloc(sizeof(struct ProgramDescriptor));
+  program = malloc(sizeof(struct ProgramDescriptor));
   program->entry_point = entry_point;
-  program->sections = instructions;
-  program->bss_size = bss_size;
+  program->sections = images;
+  program->bss_size = sections[BSS_SECTION].offset;
+  images = NULL;
 
   if (labels_out_c != NULL) {
     *labels_out_c = debug_info_list;
-  } else {
-    destroy_debug_info_list(debug_info_list);
+    debug_info_list = NULL;
   }
-  debug_info_list = NULL;
 
+done:
+  destroy_symbol_tables(num_files);
+  if (images != NULL) destroy_instruction_array_list(images);
+  destroy_debug_info_list(debug_info_list);
+  debug_info_list = NULL;
+  free(names);
   return program;
 }
