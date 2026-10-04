@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,32 +8,58 @@
 #include "assembler.h"
 #include "keyword.h"
 
+/*
+  Preprocessor: copies each source file into a fresh buffer with '#' comments
+  removed and pseudo-ops (nop, ret, push/pop, movi, mov, call) rewritten as
+  real instructions. The lexer cursor (`current`, `line_count`) is shared with
+  the assembler so operand parsing and error reporting are identical.
+*/
+
 static size_t result_index;
 
 static char* result;
 static size_t capacity; // using a dynamic array here
 
-// expand dynamic array
-bool expand_capacity(void){
-  // resize
-  result = realloc(result, 2 * capacity);
-  if (result == NULL) {
-    fprintf(stderr, "Preprocesser memory error\n");
+// Double the output buffer. On failure the old buffer is kept so the caller
+// can still free it.
+static bool expand_capacity(void){
+  char* grown = realloc(result, 2 * capacity);
+  if (grown == NULL) {
+    fprintf(stderr, "Assembler preprocessor: failed to grow output for %s to %zu bytes\n",
+            current_file, 2 * capacity);
     return false;
   }
+  result = grown;
   capacity = 2 * capacity;
   return true;
 }
 
-// expand dynamic array if necessary
-bool check_capacity(void){
-  // leave room for null terminator
-  if (result_index >= capacity - 2) return expand_capacity();
+// Ensure `extra` more bytes fit while still leaving room for one copied
+// source byte and the terminating NUL.
+static bool reserve_output(size_t extra){
+  while (result_index + extra + 2 >= capacity) {
+    if (!expand_capacity()) return false;
+  }
+  return true;
+}
+
+// Append printf-formatted text to the output buffer.
+static bool emit(const char* fmt, ...){
+  va_list args;
+  va_start(args, fmt);
+  int len = vsnprintf(NULL, 0, fmt, args);
+  va_end(args);
+  if (len < 0 || !reserve_output((size_t)len)) return false;
+
+  va_start(args, fmt);
+  vsnprintf(result + result_index, capacity - result_index, fmt, args);
+  va_end(args);
+  result_index += (size_t)len;
   return true;
 }
 
 // remove single line # comments
-bool skip_comments(void){
+static bool skip_comments(void){
   if (*current == '#'){
     while (*current != '\n') {
       if (*current == '\0') return false;
@@ -42,310 +69,144 @@ bool skip_comments(void){
   return true;
 }
 
-// Replace nop with the canonical no-op instruction encoding.
-void expand_nop(void){
-  #define NOP_EXPANSION "and  r0, r0, r0"
-
-  size_t expansion_len = strlen(NOP_EXPANSION) + 1; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, NOP_EXPANSION);
+// Report a malformed pseudo-op operand at the current source line.
+static bool macro_error(const char* message){
+  print_error();
+  fprintf(stderr, "%s", message);
+  return false;
 }
 
-// Replace ret with the stack restore and indirect jump sequence.
-void expand_ret(void){
-  #define RET_EXPANSION "jmp  r29"
-
-  size_t expansion_len = strlen(RET_EXPANSION) + 1; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, RET_EXPANSION);
+// Parse the general-purpose register operand every register pseudo-op takes.
+// Returns -1 after reporting the error.
+static int expect_macro_register(void){
+  int reg = consume_register();
+  if (reg == -1) macro_error("Invalid register\nValid registers are r0 - r31\n");
+  return reg;
 }
 
-// Expand push into a stack decrement followed by a store.
-void expand_push(bool* success){
-  #define PUSH_EXPANSION "swa  r%d [sp, -4]!"
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
+// Parse a general or control register for mov. *is_control reports which
+// kind matched. Returns -1 after reporting the error.
+static int expect_mov_register(bool* is_control){
+  *is_control = false;
+  int reg = consume_register();
+  if (reg != -1) return reg;
+  reg = consume_control_register();
+  if (reg != -1) {
+    *is_control = true;
+    return reg;
   }
-
-  size_t expansion_len = strlen(PUSH_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, PUSH_EXPANSION, ra);
+  macro_error("Invalid register\nValid registers are r0 - r31\n");
+  return -1;
 }
 
-// Expand pop into a load followed by a stack increment.
-void expand_pop(bool* success){
-  #define POP_EXPANSION "lwa  r%d, [sp], 4"
+// Stack pseudo-ops: one register operand, one pre-decrement store or
+// post-increment load of the matching width (ISA.md absolute memory forms).
+static const struct {
+  enum KeywordId id;
+  const char* format;
+} kStackMacros[] = {
+  {KW_PUSH, "swa  r%d [sp, -4]!"},
+  {KW_PSHW, "swa  r%d [sp, -4]!"},
+  {KW_POP,  "lwa  r%d, [sp], 4"},
+  {KW_POPW, "lwa  r%d, [sp], 4"},
+  {KW_PSHD, "sda  r%d [sp, -2]!"},
+  {KW_POPD, "lda  r%d, [sp], 2"},
+  {KW_PSHB, "sba  r%d [sp, -1]!"},
+  {KW_POPB, "lba  r%d, [sp], 1"},
+};
 
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
-
-  size_t expansion_len = strlen(POP_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, POP_EXPANSION, ra);
+// Expand a stack pseudo-op whose keyword has already been consumed.
+static bool expand_stack_macro(const char* format){
+  int ra = expect_macro_register();
+  if (ra == -1) return false;
+  return emit(format, ra);
 }
 
-// Expand pshd into the double-width stack-save sequence.
-void expand_pshd(bool* success){
-  #define PSHD_EXPANSION "sda  r%d [sp, -2]!"
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
-
-  size_t expansion_len = strlen(PSHD_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, PSHD_EXPANSION, ra);
-}
-
-// Expand popd into the double-width stack-restore sequence.
-void expand_popd(bool* success){
-  #define POPD_EXPANSION "lda  r%d, [sp], 2"
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
-
-  size_t expansion_len = strlen(POPD_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, POPD_EXPANSION, ra);
-}
-
-// Expand pshb into the byte-width stack-save sequence.
-void expand_pshb(bool* success){
-  #define PSHB_EXPANSION "sba  r%d [sp, -1]!"
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
-
-  size_t expansion_len = strlen(PSHB_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, PSHB_EXPANSION, ra);
-}
-
-// Expand popb into the byte-width stack-restore sequence.
-void expand_popb(bool* success){
-  #define POPB_EXPANSION "lba  r%d, [sp], 1"
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
-
-  size_t expansion_len = strlen(POPB_EXPANSION) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, POPB_EXPANSION, ra);
-}
-
-// Expand movi into the immediate-load instruction sequence.
-void expand_movi(bool* success){
-  #define MOVI_EXPANSION_LIT "movu r%d, 0x%X; movl r%d, 0x%X"
-  #define MOVI_EXPANSION_LBL_1 "movu r%d, "
-  #define MOVI_EXPANSION_LBL_2 "; movl r%d, "
-
-  int ra = consume_register();
-  if (ra == -1){
-    print_error();
-    fprintf(stderr, "Invalid register\n");
-    fprintf(stderr, "Valid registers are r0 - r31\n");
-    *success = false;
-    return;
-  }
+// Expand movi into movu/movl. A numeric immediate is split here; a label is
+// passed through so movu/movl can resolve it during assembly.
+static bool expand_movi(void){
+  int ra = expect_macro_register();
+  if (ra == -1) return false;
 
   enum ConsumeResult c_result;
   long imm = consume_literal(&c_result);
-  if (c_result == FOUND){
-    // was a number
-    size_t expansion_len = strlen(MOVI_EXPANSION_LIT) + 40; // could be a big number
-    while (result_index + expansion_len >= capacity - 2) expand_capacity();
-    result_index += sprintf(result + result_index, MOVI_EXPANSION_LIT, 
-      ra, (unsigned)imm, ra, (unsigned)imm);
-  } else {
-    // check if its a string/label
-    struct Slice* label = consume_identifier();
-    if (label != NULL){
-
-      size_t expansion_len = 
-        strlen(MOVI_EXPANSION_LBL_1) + strlen(MOVI_EXPANSION_LBL_2) + 2 * label->len + 2;
-      while (result_index + expansion_len >= capacity - 2) expand_capacity();
-      result_index += sprintf(result + result_index, MOVI_EXPANSION_LBL_1, ra);
-      strncpy(result + result_index, label->start, label->len);
-      result_index += label->len;
-      result_index += sprintf(result + result_index, MOVI_EXPANSION_LBL_2, ra);
-      strncpy(result + result_index, label->start, label->len);
-      result_index += label->len;
-
-      free(label);
-    } else {
-      // error
-      print_error();
-      fprintf(stderr, "Expected immediate\n");
-      *success = false;
-      return;
-    }
+  if (c_result == FOUND) {
+    return emit("movu r%d, 0x%X; movl r%d, 0x%X", ra, (unsigned)imm, ra, (unsigned)imm);
   }
+  struct Slice* label = consume_identifier();
+  if (label == NULL) return macro_error("Expected immediate\n");
+  bool ok = emit("movu r%d, %.*s; movl r%d, %.*s",
+                 ra, (int)label->len, label->start, ra, (int)label->len, label->start);
+  free(label);
+  return ok;
 }
 
-// Expand mov into the register or immediate form selected by its operands.
-void expand_mov(bool* success){
-  #define MOV_EXPANSION_USR "add  r%d, r%d, r0"
-  #define MOV_EXPANSION_CR_1 "crmv r%d, cr%d"
-  #define MOV_EXPANSION_CR_2 "crmv cr%d, r%d"
-  #define MOV_EXPANSION_CR_3 "crmv cr%d, cr%d"
+// Expand mov: general-to-general becomes add with r0; any control register
+// operand becomes crmv.
+static bool expand_mov(void){
+  bool a_is_control;
+  bool b_is_control;
+  int ra = expect_mov_register(&a_is_control);
+  if (ra == -1) return false;
+  int rb = expect_mov_register(&b_is_control);
+  if (rb == -1) return false;
 
-  int ra = consume_register();
-  if (ra == -1){
-    ra = consume_control_register();
-    if (ra == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return;
-    }
-    int rb = consume_register();
-    if (rb == -1){
-      rb = consume_control_register();
-      if (rb == -1){
-        print_error();
-        fprintf(stderr, "Invalid register\n");
-        fprintf(stderr, "Valid registers are r0 - r31\n");
-        *success = false;
-        return;
-      }
-      size_t expansion_len = strlen(MOV_EXPANSION_CR_3) + 2; // account for null
-      while (result_index + expansion_len >= capacity - 2) expand_capacity();
-      result_index += sprintf(result + result_index, MOV_EXPANSION_CR_3, ra, rb);
-      return;
-    }
-    size_t expansion_len = strlen(MOV_EXPANSION_CR_2) + 2; // account for null
-    while (result_index + expansion_len >= capacity - 2) expand_capacity();
-    result_index += sprintf(result + result_index, MOV_EXPANSION_CR_2, ra, rb);
-    return;
-  }
-
-  int rb = consume_register();
-  if (rb == -1){
-    rb = consume_control_register();
-    if (rb == -1){
-      print_error();
-      fprintf(stderr, "Invalid register\n");
-      fprintf(stderr, "Valid registers are r0 - r31\n");
-      *success = false;
-      return;
-    }
-
-    size_t expansion_len = strlen(MOV_EXPANSION_CR_1) + 2; // account for null
-    while (result_index + expansion_len >= capacity - 2) expand_capacity();
-    result_index += sprintf(result + result_index, MOV_EXPANSION_CR_1, ra, rb);
-    return;
-  }
-
-  size_t expansion_len = strlen(MOV_EXPANSION_USR) + 2; // account for null
-  while (result_index + expansion_len >= capacity - 2) expand_capacity();
-  result_index += sprintf(result + result_index, MOV_EXPANSION_USR, ra, rb);
-  return;
+  if (!a_is_control && !b_is_control) return emit("add  r%d, r%d, r0", ra, rb);
+  return emit("crmv %sr%d, %sr%d",
+              a_is_control ? "c" : "", ra, b_is_control ? "c" : "", rb);
 }
 
-// Expand call into a link-register save and control transfer.
-void expand_call(bool* success){
-  // immediates can be numbers or labels
-
-  #define CALL_EXPANSION_LIT "movu r29, 0x%X; movl r29, 0x%X; br r29, r29"
-
-  #define CALL_EXPANSION_LBL_1 "movu r29, "
-  #define CALL_EXPANSION_LBL_2 "; movl r29, "
-  #define CALL_EXPANSION_LBL_3 "; br r29, r29"
-
+// Expand call into an absolute address load into ra (r29) and a branch-and-link
+// through it, per abi.md's return-address register.
+static bool expand_call(void){
   enum ConsumeResult c_result;
   long imm = consume_literal(&c_result);
-  if (c_result == FOUND){
-    // was a number
-    size_t expansion_len = strlen(CALL_EXPANSION_LIT) + 20; // could be a big number
-    while (result_index + expansion_len >= capacity - 2) expand_capacity();
-    result_index += sprintf(result + result_index, CALL_EXPANSION_LIT, (unsigned)imm, (unsigned)imm);
-  } else {
-    // check if its a string/label
-    struct Slice* label = consume_identifier();
-    if (label != NULL){
-
-      size_t expansion_len = strlen(CALL_EXPANSION_LBL_1) + strlen(CALL_EXPANSION_LBL_2) + 
-        strlen(CALL_EXPANSION_LBL_3) + label->len * 2 + 2;
-      while (result_index + expansion_len >= capacity - 2) expand_capacity();
-      result_index += sprintf(result + result_index, CALL_EXPANSION_LBL_1);
-      strncpy(result + result_index, label->start, label->len);
-      result_index += label->len;
-      result_index += sprintf(result + result_index, CALL_EXPANSION_LBL_2);
-      strncpy(result + result_index, label->start, label->len);
-      result_index += label->len;
-      result_index += sprintf(result + result_index, CALL_EXPANSION_LBL_3);
-
-      free(label);
-    } else {
-      // error
-      print_error();
-      fprintf(stderr, "Expected immediate\n");
-      *success = false;
-      return;
-    }
+  if (c_result == FOUND) {
+    return emit("movu r29, 0x%X; movl r29, 0x%X; br r29, r29", (unsigned)imm, (unsigned)imm);
   }
+  struct Slice* label = consume_identifier();
+  if (label == NULL) return macro_error("Expected immediate\n");
+  bool ok = emit("movu r29, %.*s; movl r29, %.*s; br r29, r29",
+                 (int)label->len, label->start, (int)label->len, label->start);
+  free(label);
+  return ok;
 }
 
-// Scan the source and expand all recognized assembler pseudo-operations.
-bool expand_macros(void){
+// Expand the pseudo-op at `current`, if any. Returns false on a malformed
+// operand or allocation failure; both are already reported.
+static bool expand_macros(void){
   bool success = true;
   // take_keyword rejects non-pseudo lead bytes before scanning the token.
-  switch (take_keyword(KW_CLASS_PSEUDO)) {
-    case KW_NOP: expand_nop(); break;
-    case KW_RET: expand_ret(); break;
-    case KW_PUSH:
-    case KW_PSHW: expand_push(&success); break;
-    case KW_POP:
-    case KW_POPW: expand_pop(&success); break;
-    case KW_PSHD: expand_pshd(&success); break;
-    case KW_POPD: expand_popd(&success); break;
-    case KW_PSHB: expand_pshb(&success); break;
-    case KW_POPB: expand_popb(&success); break;
-    case KW_MOVI: expand_movi(&success); break;
-    case KW_MOV: expand_mov(&success); break;
-    case KW_CALL: expand_call(&success); break;
-    default: break;
+  enum KeywordId id = take_keyword(KW_CLASS_PSEUDO);
+  switch (id) {
+    case KW_NONE: return true;
+    case KW_NOP: success = emit("and  r0, r0, r0"); break;
+    case KW_RET: success = emit("jmp  r29"); break;
+    case KW_MOVI: success = expand_movi(); break;
+    case KW_MOV: success = expand_mov(); break;
+    case KW_CALL: success = expand_call(); break;
+    default:
+      for (size_t i = 0; i < sizeof(kStackMacros) / sizeof(kStackMacros[0]); ++i) {
+        if (kStackMacros[i].id == id) {
+          success = expand_stack_macro(kStackMacros[i].format);
+          break;
+        }
+      }
+      break;
   }
 
   if (!success) fprintf(stderr, "Preprocesser macro error\n");
 
   return success;
+}
+
+// Free the finished outputs, the result table, and the in-progress buffer
+// after a failure partway through file `count`.
+static void free_partial_results(char** result_list, int count){
+  for (int j = 0; j < count; ++j) free(result_list[j]);
+  free(result_list);
+  free(result);
+  result = NULL;
 }
 
 // copy the program into a new string, but without the comments
@@ -372,8 +233,7 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     // Size the output from the input so macro expansion does not recopy the
     // buffer from a 60-byte seed. One extra byte holds the leading NUL the
     // assembler uses as a sentinel, and another holds the terminating NUL.
-    size_t src_len = 0;
-    while (current[src_len] != '\0') src_len++;
+    size_t src_len = strlen(current);
     enum { kMinPreprocessCapacity = 64 };
     capacity = src_len + 2;
     if (capacity < kMinPreprocessCapacity) capacity = kMinPreprocessCapacity;
@@ -382,33 +242,25 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
     if (result == NULL) {
       // Earlier files and the result table remain owned here until success.
       fprintf(stderr, "Assembler preprocessor: failed to allocate output for %s\n", current_file);
-      for (int j = 0; j < i; ++j) free(result_list[j]);
-      free(result_list);
+      free_partial_results(result_list, i);
       return NULL;
     }
 
     // initial null used to detect start of program
     // used when printing errors
     result[result_index] = '\0';
-    result_index++; 
+    result_index++;
 
     while (*current != '\0'){
-      // expand dynamic array if necessary, exit if realloc fails 
-      if (!check_capacity()) {
-        for (int j = 0; j < i; ++j) free(result_list[j]);
-        free(result_list);
-        return NULL;
-      }
-
       // skip comments, exit if EOF is reached
-      if (!skip_comments()) goto end;
+      if (!skip_comments()) break;
 
-      if (!expand_macros()) {
-        for (int j = 0; j < i; ++j) free(result_list[j]);
-        free(result);
-        free(result_list);
+      if (!reserve_output(0) || !expand_macros()) {
+        free_partial_results(result_list, i);
         return NULL;
       }
+      // A pseudo-op can be the last token in a file with no trailing newline.
+      if (*current == '\0') break;
 
       // write one character, then repeat loop
       result[result_index] = *current;
@@ -417,9 +269,10 @@ char** preprocess(int num_files, int* file_names, bool is_kernel,
       current++;
     }
 
-    // include null terminator, realloc should ensure there's always room
-    end:  result[result_index] = 0;
+    // include null terminator, reserve_output keeps room for it
+    result[result_index] = 0;
     result_list[i] = result;
+    result = NULL;
   }
 
   return result_list;

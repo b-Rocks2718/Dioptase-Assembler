@@ -1,9 +1,5 @@
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,15 +35,48 @@ static char* join_paths(const char* left, const char* right) {
   return path;
 }
 
-// Drop source mappings once the preprocessor has copied what it needs.
-// A zero-length file is not mapped, so it is skipped.
-static void unmap_sources(char const** files, const size_t* sizes, int count) {
-  if (files == NULL || sizes == NULL) return;
-  for (int i = 0; i < count; ++i) {
-    if (files[i] != NULL && sizes[i] > 0) {
-      munmap((void*)files[i], sizes[i]);
-      files[i] = NULL;
+// Read a whole source file into a heap buffer with a terminating NUL, which
+// the preprocessor relies on to find the end of input. Uses only stdio so the
+// assembler can later be hosted on Dioptase without an mmap equivalent.
+// Returns NULL after printing a diagnostic naming the file and the failing step.
+static char* read_source_file(const char* path) {
+  FILE* f = fopen(path, "rb");
+  if (f == NULL) {
+    fprintf(stderr, "Failed to open source file %s: %s\n", path, strerror(errno));
+    return NULL;
+  }
+  size_t cap = 4096;
+  size_t len = 0;
+  char* buf = malloc(cap);
+  while (buf != NULL) {
+    len += fread(buf + len, 1, cap - len - 1, f);
+    if (ferror(f)) {
+      fprintf(stderr, "Failed to read source file %s: %s\n", path, strerror(errno));
+      free(buf);
+      fclose(f);
+      return NULL;
     }
+    if (feof(f)) break;
+    char* grown = realloc(buf, cap * 2);
+    if (grown == NULL) free(buf);
+    buf = grown;
+    cap *= 2;
+  }
+  fclose(f);
+  if (buf == NULL) {
+    fprintf(stderr, "Assembler Error: failed to buffer source file %s\n", path);
+    return NULL;
+  }
+  buf[len] = '\0';
+  return buf;
+}
+
+// Free the source buffers read so far. Entries past `count` are untouched.
+static void free_sources(char const** files, int count) {
+  if (files == NULL) return;
+  for (int i = 0; i < count; ++i) {
+    free((void*)files[i]);
+    files[i] = NULL;
   }
 }
 
@@ -190,11 +219,8 @@ int main(int argc, const char *const *const argv){
   }
 
   char const** const files = calloc((size_t)num_files, sizeof(*files));
-  size_t* file_sizes = calloc((size_t)num_files, sizeof(size_t));
-  if (files == NULL || file_sizes == NULL) {
+  if (files == NULL) {
     fprintf(stderr, "Assembler Error: failed to allocate source file table for %d files\n", num_files);
-    free(files);
-    free(file_sizes);
     free(file_names);
     free(cli_defines);
     free(input_args_alloc);
@@ -203,56 +229,22 @@ int main(int argc, const char *const *const argv){
   }
 
   for (int i = 0; i < num_files; ++i){
-    // open the files
-    const char* file_path = input_args[file_names[i]];
-    int fd = open(file_path,O_RDONLY);
-    if (fd < 0) {
-      fprintf(stderr, "Failed to open source file %s: %s\n", file_path, strerror(errno));
-      unmap_sources(files, file_sizes, i);
-      exit(1);
-    }
-
-    // determine its size (std::filesystem::get_size?)
-    struct stat file_stats;
-    int rc = fstat(fd,&file_stats);
-    if (rc != 0) {
-      fprintf(stderr, "Failed to stat source file %s: %s\n", file_path, strerror(errno));
-      close(fd);
-      unmap_sources(files, file_sizes, i);
-      exit(1);
-    }
-    file_sizes[i] = (size_t)file_stats.st_size;
-
-    // map the file in my address space
-    char const* const src = (char const * const)mmap(
-        0,
-        file_stats.st_size,
-        PROT_READ,
-        MAP_PRIVATE,
-        fd,
-        0);
-    if (src == MAP_FAILED) {
-      fprintf(stderr, "Failed to map source file %s: %s\n", file_path, strerror(errno));
-      close(fd);
-      unmap_sources(files, file_sizes, i);
+    files[i] = read_source_file(input_args[file_names[i]]);
+    if (files[i] == NULL) {
+      free_sources(files, i);
       free(file_names);
       free(files);
-      free(file_sizes);
       free(cli_defines);
       free(input_args_alloc);
       free_crt_paths(crt_paths, kCrtFileCount);
       return 1;
     }
-    close(fd);
-    files[i] = src;
   }
 
   char** preprocessed = preprocess(num_files, file_names, is_kernel, input_args, files);
-  // The preprocessed buffers own the text assemble() reads, so the source
-  // mappings can be released before the two assembly passes.
-  unmap_sources(files, file_sizes, num_files);
-  free(file_sizes);
-  file_sizes = NULL;
+  // The preprocessed buffers own the text assemble() reads, so the raw
+  // sources can be released before the two assembly passes.
+  free_sources(files, num_files);
   if (preprocessed == NULL) {
     free(file_names);
     free(files);

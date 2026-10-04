@@ -444,49 +444,42 @@ static bool consume_named_register(const char* name) {
   return false;
 }
 
-// print line causing an error
-void print_error(void) {
-  // avoid printing this twice
-  static bool has_printed = false;
+// Print "<kind> in <file>\nline N: "<source line>"" for the line containing
+// `current`. The line is trimmed of surrounding whitespace; a blank line prints
+// as "". The walk back stops at current_buffer_start or the NUL sentinel that
+// precedes every preprocessed buffer.
+static void print_source_context(const char* kind) {
+  fprintf(stderr, "%s in %s\nline %u: \"", kind, current_file, line_count);
 
-  if (!has_printed){
-    fprintf(stderr, "Error in %s\nline %u: \"", current_file, line_count);
-    
-    // get start and end of line
-    char const * start = current;
-    char const * buffer_start = current_buffer_start != NULL ? current_buffer_start : current;
-    while (start > buffer_start && *(start - 1) != '\0' && *(start - 1) != '\n') start--;
-    char const * end = current;
-    while (*end != '\0' && *end != '\n') end++;
-    
-    // remove whitespace at beginning and end
-    while (ascii_isspace((unsigned char)*start)) start++;
-    while (ascii_isspace((unsigned char)*(end - 1))) end--;
-
-    // print the line
-    struct Slice unrecognized = {start, end - start};
-    print_slice_err(&unrecognized);
-    fprintf(stderr, "\"\n");
-    has_printed = true;
-  }
-}
-
-// Print a warning at the current source location.
-static void print_warning(const char* message) {
-  fprintf(stderr, "Warning in %s\nline %u: \"", current_file, line_count);
-
-  char const * start = current;
   char const * buffer_start = current_buffer_start != NULL ? current_buffer_start : current;
+  char const * start = current;
   while (start > buffer_start && *(start - 1) != '\0' && *(start - 1) != '\n') start--;
   char const * end = current;
   while (*end != '\0' && *end != '\n') end++;
 
-  while (ascii_isspace((unsigned char)*start)) start++;
+  // Trim inside [start, end) only, so a whitespace-only line cannot make the
+  // span run into the neighbouring lines.
+  while (start < end && ascii_isspace((unsigned char)*start)) start++;
   while (end > start && ascii_isspace((unsigned char)*(end - 1))) end--;
 
-  struct Slice unrecognized = {start, end - start};
-  print_slice_err(&unrecognized);
+  struct Slice line = {start, (size_t)(end - start)};
+  print_slice_err(&line);
   fprintf(stderr, "\"\n");
+}
+
+// print line causing an error
+// Only the first error prints its source context; later diagnostics from the
+// same failure (e.g. "Preprocesser macro error") are printed bare.
+void print_error(void) {
+  static bool has_printed = false;
+  if (has_printed) return;
+  print_source_context("Error");
+  has_printed = true;
+}
+
+// Print a warning at the current source location.
+static void print_warning(const char* message) {
+  print_source_context("Warning");
   fprintf(stderr, "%s\n", message);
 }
 
@@ -1003,7 +996,7 @@ int encode_bitwise_immediate(long imm, bool* success){
 
 // Encode an immediate accepted by the shift instruction form.
 int encode_shift_immediate(long imm, bool* success){
-  if (0 <= imm && imm < 31){
+  if (0 <= imm && imm <= 31){
     return imm;
   } else {
     *success = false;
@@ -1173,8 +1166,9 @@ int consume_lui(bool* success){
   long imm = consume_immediate(&result);
   if (result != FOUND){
     print_error();
-    fprintf(stderr, "Invalid immediate\n");
+    if (result == NOT_FOUND) fprintf(stderr, "Invalid immediate\n");
     *success = false;
+    return 0;
   }
 
   int encoding = encode_lui_immediate(imm, success);
@@ -1403,7 +1397,7 @@ int consume_branch(int branch_code, bool is_absolute, bool* success){
   if (ra == -1){
     // it's an immediate branch
     enum ConsumeResult result;
-    int imm = consume_immediate(&result);
+    long imm = consume_immediate(&result);
     if (result != FOUND){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
@@ -1474,7 +1468,7 @@ int consume_jmp(bool* success){
   if (ra == -1){
     // it's an immediate branch
     enum ConsumeResult result;
-    int imm = consume_immediate(&result);
+    long imm = consume_immediate(&result);
     if (result != FOUND){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "Branch instruction expects register or immediate operand\n");
@@ -1851,7 +1845,7 @@ int consume_ipi(bool* success){
   } else {
     // ipi to a specific core
     enum ConsumeResult result;
-    int imm = consume_literal(&result);
+    long imm = consume_literal(&result);
     if (result != FOUND || imm < 0 || imm >= 4){
       print_error();
       if (result == NOT_FOUND) fprintf(stderr, "ipi instruction expects 'all' or core num in range [0, 3]\n");
