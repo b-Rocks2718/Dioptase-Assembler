@@ -13,6 +13,13 @@ if ! command -v "${VALGRIND:-valgrind}" >/dev/null 2>&1; then
   exit 1
 fi
 
+# The keyword hash table in src/keyword.c is generated; reject hand edits
+# that leave it out of step with tools/gen_keywords.py.
+if ! python3 "$REPO_DIR/tools/gen_keywords.py" --check; then
+  echo "Assembler CI: src/keyword.c does not match tools/gen_keywords.py output." >&2
+  exit 1
+fi
+
 # Run suite.
 run_suite() {
   local target="$1"

@@ -1,9 +1,11 @@
 #ifndef PREPROCESSOR_H
 #define PREPROCESSOR_H
 
-#include <stdbool.h>
-
-char** preprocess(int num_files, int* file_names, bool has_start,
-  const char *const *const argv, const char * const * const files);
+// Copy each NUL-terminated source in `files` into a new buffer with '#'
+// comments removed and pseudo-ops expanded; `paths` name the files in
+// diagnostics. Each output starts with a NUL sentinel byte (the text begins
+// at out[i] + 1). Returns NULL after reporting an error, having freed every
+// partial output; on success the caller frees each buffer and the array.
+char** preprocess(int num_files, const char* const* paths, const char* const* files);
 
 #endif  // PREPROCESSOR_H

@@ -26,6 +26,7 @@ struct LabelList* create_label_list(size_t capacity){
   return list;
 }
 
+// Compare a label entry with a name/address/class identity (defined below).
 static bool label_entry_matches(const struct LabelEntry* entry, const char* name, size_t len,
                                 uint32_t addr, bool is_data);
 
@@ -39,6 +40,7 @@ static size_t label_key_hash(const char* name, size_t len, uint32_t addr, bool i
   return hash;
 }
 
+// Double the duplicate index and rehash every entry into it.
 static bool label_index_grow(struct LabelList* list) {
   size_t new_cap = list->index_cap == 0 ? 16 : list->index_cap * 2;
   size_t* next = malloc(sizeof(size_t) * new_cap);
@@ -60,6 +62,8 @@ static bool label_index_grow(struct LabelList* list) {
   return true;
 }
 
+// Return whether an identical label record is already in the list. Falls back
+// to a linear scan if the index could not be allocated.
 static bool label_already_present(const struct LabelList* list, const char* name, size_t len,
                                   uint32_t addr, bool is_data) {
   if (list->index == NULL || list->index_cap == 0) {
@@ -77,6 +81,7 @@ static bool label_already_present(const struct LabelList* list, const char* name
   return false;
 }
 
+// Record entries[entry_index] in the open-addressed duplicate index.
 static void label_index_insert(struct LabelList* list, size_t entry_index) {
   if (list->index == NULL) return;
   const struct LabelEntry* entry = &list->entries[entry_index];

@@ -1,9 +1,5 @@
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,355 +17,259 @@ static const char* const kCrtFileNames[kCrtFileCount] = {
   "arithmetic.s",
 };
 
+// Parsed command line. inputs lists every source in assembly order, with
+// the CRT files first when -crt is given; CRT paths are owned in crt_paths.
+struct Options {
+  const char* target;
+  bool pre_only;
+  bool is_kernel;
+  bool debug_labels;
+  bool output_binary;
+  const char** defines;
+  int num_defines;
+  const char** inputs;
+  int num_inputs;
+  char* crt_paths[kCrtFileCount];
+};
+
 // Join two path components with a '/' separator when needed.
 // Returns a heap-allocated joined path or NULL on allocation failure.
 static char* join_paths(const char* left, const char* right) {
-  if (left == NULL || right == NULL) return NULL;
   size_t left_len = strlen(left);
   size_t right_len = strlen(right);
   int needs_sep = (left_len > 0 && left[left_len - 1] != '/');
   size_t total_len = left_len + (needs_sep ? 1 : 0) + right_len + 1;
   char* path = malloc(total_len);
   if (path == NULL) return NULL;
-  if (needs_sep) {
-    snprintf(path, total_len, "%s/%s", left, right);
-  } else {
-    snprintf(path, total_len, "%s%s", left, right);
-  }
+  snprintf(path, total_len, needs_sep ? "%s/%s" : "%s%s", left, right);
   return path;
 }
 
-// Drop source mappings once the preprocessor has copied what it needs.
-// A zero-length file is not mapped, so it is skipped.
-static void unmap_sources(char const** files, const size_t* sizes, int count) {
-  if (files == NULL || sizes == NULL) return;
-  for (int i = 0; i < count; ++i) {
-    if (files[i] != NULL && sizes[i] > 0) {
-      munmap((void*)files[i], sizes[i]);
-      files[i] = NULL;
-    }
-  }
-}
-
-// Free an array of CRT path strings.
-// Safe to call with NULL paths.
-static void free_crt_paths(char** paths, int count) {
-  if (paths == NULL) return;
-  for (int i = 0; i < count; ++i) {
-    free(paths[i]);
-  }
-  free(paths);
-}
-
-// Assemble the requested source file and write its binary and debug outputs.
-int main(int argc, const char *const *const argv){
-  if (argc <= 0) {
-    fprintf(stderr,"usage: %s <file name>\n",argv[0]);
-    exit(1);
+// Parse argv into opts. Returns false after printing the problem.
+// opts must be zeroed; free_options releases it whether or not parsing succeeded.
+static bool parse_args(int argc, const char* const* argv, struct Options* opts) {
+  // Leave room for the CRT inputs ahead of the user's files.
+  opts->inputs = malloc((size_t)(argc + kCrtFileCount) * sizeof(*opts->inputs));
+  opts->defines = malloc((size_t)argc * sizeof(*opts->defines));
+  if (opts->inputs == NULL || opts->defines == NULL) {
+    fprintf(stderr, "Assembler Error: failed to allocate argument tables for %d arguments\n", argc);
+    return false;
   }
 
-  // Leave room for optional CRT inputs when -crt is used.
-  int* file_names = malloc((argc + kCrtFileCount) * sizeof(int));
-  int num_files = 0;
-
-  const char* target_name = "./a.hex";
-  char* target_name_alloc = NULL;
-  bool target_name_default = true;
-
-  // look for flags
-  bool pre_only = false;
-  bool is_kernel = false;
-  bool debug_labels = false;
-  bool output_binary = false;
   const char* crt_dir = NULL;
-  const char** cli_defines = malloc(argc * sizeof(char*));
-  int num_defines = 0;
+  const char* target = NULL;
+  int first_user_input = kCrtFileCount;  // CRT slots are filled in below
+  opts->num_inputs = first_user_input;
+
   for (int i = 1; i < argc; ++i){
-    if (strcmp(argv[i], "-pre") == 0){
-      pre_only = true;
-    } else if (strcmp(argv[i], "-o") == 0){
-      // the next argument should be a file name
+    const char* arg = argv[i];
+    if (strcmp(arg, "-pre") == 0){
+      opts->pre_only = true;
+    } else if (strcmp(arg, "-o") == 0){
       if (i + 1 == argc){
         fprintf(stderr, "Must specify a target name after -o flag\n");
-        free(file_names);
-        exit(1);
+        return false;
       }
-      target_name = argv[i + 1];
-      target_name_default = false;
-      ++i;
-    } else if (strcmp(argv[i], "-bin") == 0){
-      output_binary = true;
-    } else if (strcmp(argv[i], "-kernel") == 0){
-      is_kernel = true;
-    } else if (strcmp(argv[i], "-g") == 0){
-      debug_labels = true;
-    } else if (strcmp(argv[i], "-crt") == 0){
+      target = argv[++i];
+    } else if (strcmp(arg, "-bin") == 0){
+      opts->output_binary = true;
+    } else if (strcmp(arg, "-kernel") == 0){
+      opts->is_kernel = true;
+    } else if (strcmp(arg, "-g") == 0){
+      opts->debug_labels = true;
+    } else if (strcmp(arg, "-crt") == 0){
       if (i + 1 == argc){
         fprintf(stderr, "Must specify a CRT directory after -crt\n");
-        free(file_names);
-        free(cli_defines);
-        exit(1);
+        return false;
       }
       crt_dir = argv[++i];
-    } else if (strncmp(argv[i], "-D", 2) == 0){
-      const char* def = argv[i] + 2;
-      if (def[0] == '\0' || strchr(def, '=') == NULL){
-        fprintf(stderr, "Invalid -D definition (expected -DNAME=value)\n");
-        free(file_names);
-        free(cli_defines);
-        exit(1);
-      }
-      cli_defines[num_defines++] = def;
-    } else if (argv[i][0] == '-'){
-      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -bin, -kernel, -g, -crt <dir>, or -DNAME=value\n", argv[i]);
-      free(file_names);
-      free(cli_defines);
-      exit(1);
+    } else if (strncmp(arg, "-D", 2) == 0){
+      opts->defines[opts->num_defines++] = arg + 2;
+    } else if (arg[0] == '-'){
+      fprintf(stderr, "Unrecognized flag %s. Allowed flags are -pre, -o, -bin, -kernel, -g, -crt <dir>, or -DNAME=value\n", arg);
+      return false;
     } else {
-      file_names[num_files] = i;
-      num_files++;
+      opts->inputs[opts->num_inputs++] = arg;
     }
   }
 
-  if (num_files <= 0) {
-    fprintf(stderr,"Must pass at least one source file\n");
-    exit(1);
+  if (opts->num_inputs == first_user_input) {
+    fprintf(stderr, "Must pass at least one source file\n");
+    return false;
   }
-
-  if (output_binary && debug_labels){
+  if (opts->output_binary && opts->debug_labels){
     fprintf(stderr, "Assembler Error: -bin output does not support -g debug labels\n");
-    free(file_names);
-    free(cli_defines);
-    exit(1);
+    return false;
   }
-
-  if (output_binary && target_name_default){
-    target_name = "./a.bin";
-  }
-
-  const char* const* input_args = argv;
-  const char** input_args_alloc = NULL;
-  char** crt_paths = NULL;
+  opts->target = target != NULL ? target : (opts->output_binary ? "./a.bin" : "./a.hex");
 
   if (crt_dir != NULL) {
     // Prepend CRT sources so _start is emitted first in the output image.
-    crt_paths = malloc(kCrtFileCount * sizeof(char*));
-    if (crt_paths == NULL) {
-      fprintf(stderr, "Assembler Error: failed to allocate CRT path list\n");
-      free(file_names);
-      free(cli_defines);
-      exit(1);
-    }
-    for (int i = 0; i < kCrtFileCount; ++i) crt_paths[i] = NULL;
     for (int i = 0; i < kCrtFileCount; ++i) {
-      crt_paths[i] = join_paths(crt_dir, kCrtFileNames[i]);
-      if (crt_paths[i] == NULL) {
-        fprintf(stderr, "Assembler Error: failed to allocate CRT path for %s\n",
-                kCrtFileNames[i]);
-        free(file_names);
-        free(cli_defines);
-        free_crt_paths(crt_paths, kCrtFileCount);
-        exit(1);
+      opts->crt_paths[i] = join_paths(crt_dir, kCrtFileNames[i]);
+      if (opts->crt_paths[i] == NULL) {
+        fprintf(stderr, "Assembler Error: failed to allocate CRT path for %s\n", kCrtFileNames[i]);
+        return false;
       }
+      opts->inputs[i] = opts->crt_paths[i];
     }
-
-    input_args_alloc = malloc((argc + kCrtFileCount) * sizeof(char*));
-    for (int i = 0; i < argc; ++i) input_args_alloc[i] = argv[i];
-    for (int i = 0; i < kCrtFileCount; ++i) {
-      input_args_alloc[argc + i] = crt_paths[i];
-    }
-    input_args = input_args_alloc;
-
-    for (int i = num_files - 1; i >= 0; --i) {
-      file_names[i + kCrtFileCount] = file_names[i];
-    }
-    for (int i = 0; i < kCrtFileCount; ++i) {
-      file_names[i] = argc + i;
-    }
-    num_files += kCrtFileCount;
-  }
-
-  char const** const files = calloc((size_t)num_files, sizeof(*files));
-  size_t* file_sizes = calloc((size_t)num_files, sizeof(size_t));
-  if (files == NULL || file_sizes == NULL) {
-    fprintf(stderr, "Assembler Error: failed to allocate source file table for %d files\n", num_files);
-    free(files);
-    free(file_sizes);
-    free(file_names);
-    free(cli_defines);
-    free(input_args_alloc);
-    free_crt_paths(crt_paths, kCrtFileCount);
-    return 1;
-  }
-
-  for (int i = 0; i < num_files; ++i){
-    // open the files
-    const char* file_path = input_args[file_names[i]];
-    int fd = open(file_path,O_RDONLY);
-    if (fd < 0) {
-      fprintf(stderr, "Failed to open source file %s: %s\n", file_path, strerror(errno));
-      unmap_sources(files, file_sizes, i);
-      exit(1);
-    }
-
-    // determine its size (std::filesystem::get_size?)
-    struct stat file_stats;
-    int rc = fstat(fd,&file_stats);
-    if (rc != 0) {
-      fprintf(stderr, "Failed to stat source file %s: %s\n", file_path, strerror(errno));
-      close(fd);
-      unmap_sources(files, file_sizes, i);
-      exit(1);
-    }
-    file_sizes[i] = (size_t)file_stats.st_size;
-
-    // map the file in my address space
-    char const* const src = (char const * const)mmap(
-        0,
-        file_stats.st_size,
-        PROT_READ,
-        MAP_PRIVATE,
-        fd,
-        0);
-    if (src == MAP_FAILED) {
-      fprintf(stderr, "Failed to map source file %s: %s\n", file_path, strerror(errno));
-      close(fd);
-      unmap_sources(files, file_sizes, i);
-      free(file_names);
-      free(files);
-      free(file_sizes);
-      free(cli_defines);
-      free(input_args_alloc);
-      free_crt_paths(crt_paths, kCrtFileCount);
-      return 1;
-    }
-    close(fd);
-    files[i] = src;
-  }
-
-  char** preprocessed = preprocess(num_files, file_names, is_kernel, input_args, files);
-  // The preprocessed buffers own the text assemble() reads, so the source
-  // mappings can be released before the two assembly passes.
-  unmap_sources(files, file_sizes, num_files);
-  free(file_sizes);
-  file_sizes = NULL;
-  if (preprocessed == NULL) {
-    free(file_names);
-    free(files);
-    free(cli_defines);
-    free(input_args_alloc);
-    free_crt_paths(crt_paths, kCrtFileCount);
-    return 1;
-  }
-
-  if (pre_only){
-    for (int i = 0; i < num_files; ++i) printf("%s\n", preprocessed[i] + 1);
-    
-    free(file_names);
-    free(files);
-    for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
-    free(preprocessed);
-    free(cli_defines);
-    free(input_args_alloc);
-    free_crt_paths(crt_paths, kCrtFileCount);
-    return 0;
-  }
-
-  set_cli_defines(num_defines, cli_defines);
-  struct LabelList* labels = NULL;
-  struct DebugInfoList* labels_c = NULL;
-  struct ProgramDescriptor* program = assemble(
-    num_files,
-    file_names,
-    is_kernel,
-    input_args,
-    preprocessed,
-    debug_labels ? &labels : NULL,
-    debug_labels ? &labels_c : NULL
-  );
-  
-  for (int i = 0; i < num_files; ++i) free(preprocessed[i]);
-  free(preprocessed);
-  free(file_names);
-  free(files);
-  free(cli_defines);
-  free(input_args_alloc);
-  free_crt_paths(crt_paths, kCrtFileCount);
-
-  if (program == NULL) {
-    if (target_name_alloc != NULL) free(target_name_alloc);
-    return 1;
-  }
-
-  // write output
-  const char* output_mode = output_binary ? "wb" : "w";
-  FILE* fptr = fopen(target_name, output_mode);
-
-  if(fptr == NULL){
-    fprintf(stderr, "Could not open output file\n");
-    destroy_program_descriptor(program);
-    destroy_label_list(labels);
-    destroy_debug_info_list(labels_c);
-    if (target_name_alloc != NULL) free(target_name_alloc);
-    return 1;
-  }
-
-  if (output_binary) {
-    if (is_kernel) {
-      // write raw kernel image with origin padding
-      fwrite_instruction_array_list(fptr, program->sections, true);
-    } else {
-      // write elf header
-      struct ElfHeader header = create_elf_header(program);
-      fwrite_elf_header(fptr, &header);
-
-      // write program header table
-      struct ElfProgramHeader* pht = create_PHT(program);
-      fwrite_pht(fptr, pht);
-      free(pht);
-
-      // write program data
-      fwrite_instruction_array_list(fptr, program->sections, false);
-    }
-
-    destroy_program_descriptor(program);
   } else {
-    if (is_kernel) {
-      // write raw instructions without ELF structure
-      fprint_instruction_array_list(fptr, program->sections, true);
+    // No CRT: close the gap left by the reserved slots.
+    opts->num_inputs -= kCrtFileCount;
+    memmove(opts->inputs, opts->inputs + kCrtFileCount, (size_t)opts->num_inputs * sizeof(*opts->inputs));
+  }
+  return true;
+}
+
+// Release everything parse_args allocated.
+static void free_options(struct Options* opts) {
+  for (int i = 0; i < kCrtFileCount; ++i) free(opts->crt_paths[i]);
+  free(opts->inputs);
+  free(opts->defines);
+}
+
+// Read a whole source file into a heap buffer with a terminating NUL, which
+// the preprocessor relies on to find the end of input. Uses only stdio so the
+// assembler can later be hosted on Dioptase without an mmap equivalent.
+// Returns NULL after printing a diagnostic naming the file and the failing step.
+static char* read_source_file(const char* path) {
+  FILE* f = fopen(path, "rb");
+  if (f == NULL) {
+    fprintf(stderr, "Failed to open source file %s: %s\n", path, strerror(errno));
+    return NULL;
+  }
+  size_t cap = 4096;
+  size_t len = 0;
+  char* buf = malloc(cap);
+  while (buf != NULL) {
+    len += fread(buf + len, 1, cap - len - 1, f);
+    if (ferror(f)) {
+      fprintf(stderr, "Failed to read source file %s: %s\n", path, strerror(errno));
+      free(buf);
+      fclose(f);
+      return NULL;
+    }
+    if (feof(f)) break;
+    char* grown = realloc(buf, cap * 2);
+    if (grown == NULL) free(buf);
+    buf = grown;
+    cap *= 2;
+  }
+  fclose(f);
+  if (buf == NULL) {
+    fprintf(stderr, "Assembler Error: failed to buffer source file %s\n", path);
+    return NULL;
+  }
+  buf[len] = '\0';
+  return buf;
+}
+
+// Free `count` NUL-terminated buffers and the array holding them.
+static void free_buffers(char** buffers, int count) {
+  if (buffers == NULL) return;
+  for (int i = 0; i < count; ++i) free(buffers[i]);
+  free(buffers);
+}
+
+// Read and preprocess every input. Returns NULL after reporting an error.
+static char** load_sources(const struct Options* opts) {
+  char** sources = calloc((size_t)opts->num_inputs, sizeof(*sources));
+  if (sources == NULL) {
+    fprintf(stderr, "Assembler Error: failed to allocate source file table for %d files\n", opts->num_inputs);
+    return NULL;
+  }
+  for (int i = 0; i < opts->num_inputs; ++i){
+    sources[i] = read_source_file(opts->inputs[i]);
+    if (sources[i] == NULL) {
+      free_buffers(sources, i);
+      return NULL;
+    }
+  }
+  // The preprocessed buffers own the text assemble() reads, so the raw
+  // sources can be released before the two assembly passes.
+  char** preprocessed = preprocess(opts->num_inputs, opts->inputs, (const char* const*)sources);
+  free_buffers(sources, opts->num_inputs);
+  return preprocessed;
+}
+
+// Write the assembled program in the selected format:
+//   -kernel: raw image (hex with "@word-address" origin markers, or bytes
+//            padded to each origin with -bin);
+//   user:    ELF header, program header table, then the segments.
+// With -g (hex only), label and debug records are appended as "#..." lines.
+static void write_program(FILE* out, const struct Options* opts, struct ProgramDescriptor* program,
+                          const struct LabelList* labels, struct DebugInfoList* debug) {
+  if (!opts->is_kernel) {
+    struct ElfHeader header = create_elf_header(program);
+    struct ElfProgramHeader* pht = create_PHT(program);
+    if (opts->output_binary) {
+      fwrite_elf_header(out, &header);
+      fwrite_pht(out, pht);
     } else {
-      // write elf header
-      struct ElfHeader header = create_elf_header(program);
-      fprint_elf_header(fptr, &header);
-
-      // write program header table
-      struct ElfProgramHeader* pht = create_PHT(program);
-      fprint_pht(fptr, pht);
-      free(pht);
-
-      // write program data
-      fprint_instruction_array_list(fptr, program->sections, false);
+      fprint_elf_header(out, &header);
+      fprint_pht(out, pht);
     }
-
-    destroy_program_descriptor(program);
-
-    // Append label metadata for the debugger.
-    if (debug_labels){
-      if (is_kernel) {
-        fprint_label_list_kernel(fptr, labels);
-      } else {
-        fprint_label_list(fptr, labels);
-      }
-      fprint_debug_info_list(fptr, labels_c);
-    }
+    free(pht);
   }
 
+  // Kernel images carry their own origins; ELF segments are placed by the PHT.
+  if (opts->output_binary) {
+    fwrite_instruction_array_list(out, program->sections, opts->is_kernel);
+  } else {
+    fprint_instruction_array_list(out, program->sections, opts->is_kernel);
+  }
+
+  if (opts->debug_labels) {
+    if (opts->is_kernel) fprint_label_list_kernel(out, labels);
+    else fprint_label_list(out, labels);
+    fprint_debug_info_list(out, debug);
+  }
+}
+
+// Assemble the requested source files and write the image (and -g records).
+int main(int argc, const char *const *const argv){
+  int status = 1;
+  struct Options opts;
+  memset(&opts, 0, sizeof(opts));
+  char** preprocessed = NULL;
+  struct ProgramDescriptor* program = NULL;
+  struct LabelList* labels = NULL;
+  struct DebugInfoList* debug = NULL;
+
+  if (!parse_args(argc, argv, &opts)) goto done;
+  if (!set_cli_defines(opts.num_defines, opts.defines)) goto done;
+
+  preprocessed = load_sources(&opts);
+  if (preprocessed == NULL) goto done;
+
+  if (opts.pre_only){
+    // Skip each buffer's leading NUL sentinel.
+    for (int i = 0; i < opts.num_inputs; ++i) printf("%s\n", preprocessed[i] + 1);
+    status = 0;
+    goto done;
+  }
+
+  program = assemble(opts.num_inputs, opts.inputs, preprocessed, opts.is_kernel,
+                     opts.debug_labels ? &labels : NULL, opts.debug_labels ? &debug : NULL);
+  if (program == NULL) goto done;
+
+  FILE* out = fopen(opts.target, opts.output_binary ? "wb" : "w");
+  if (out == NULL){
+    fprintf(stderr, "Assembler Error: could not open output file %s: %s\n", opts.target, strerror(errno));
+    goto done;
+  }
+  write_program(out, &opts, program, labels, debug);
+  if (fclose(out) != 0) {
+    fprintf(stderr, "Assembler Error: failed to write output file %s: %s\n", opts.target, strerror(errno));
+    goto done;
+  }
+  status = 0;
+
+done:
+  if (program != NULL) destroy_program_descriptor(program);
   destroy_label_list(labels);
-  destroy_debug_info_list(labels_c);
-  fclose(fptr);
-  if (target_name_alloc != NULL) {
-    free(target_name_alloc);
-  }
-
-  return 0;
+  destroy_debug_info_list(debug);
+  free_buffers(preprocessed, opts.num_inputs);
+  free_options(&opts);
+  return status;
 }

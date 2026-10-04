@@ -37,20 +37,19 @@ static void tracked_free(void* ptr) { /* Release memory and record the deallocat
 
 int main(void) { /* Inject every allocation failure point and require complete preprocessor cleanup. */
   const size_t allocation_count = 3;
-  int file_names[] = {0, 1};
-  const char* argv[] = {"first.s", "second.s"};
+  const char* paths[] = {"first.s", "second.s"};
   const char* files[] = {"", ""};
 
   for (size_t failure = 1; failure <= allocation_count; failure++) {
     allocation_calls = 0;
     fail_on_call = failure;
-    char** outputs = preprocess(2, file_names, true, argv, files);
+    char** outputs = preprocess(2, paths, files);
     assert(outputs == NULL && "preprocessing must report allocation failure");
     assert(live_allocations == 0 && "failure must release all partial output");
   }
 
   fail_on_call = 0;
-  char** outputs = preprocess(2, file_names, true, argv, files);
+  char** outputs = preprocess(2, paths, files);
   assert(outputs != NULL && "successful preprocessing must still work");
   tracked_free(outputs[0]);
   tracked_free(outputs[1]);

@@ -1,13 +1,11 @@
 #ifndef ASSEMBLER_H
 #define ASSEMBLER_H
 
-#include "stdbool.h"
+#include <stdbool.h>
 #include "debug.h"
+#include "lexer.h"
 
-extern char const * current_file;
-extern char const * current;
-extern char const * current_buffer_start;
-extern unsigned line_count;
+// Address of the statement being assembled (runtime address in pass 2).
 extern unsigned long pc;
 
 // does the file wish to use pivileges instructions?
@@ -15,18 +13,17 @@ extern bool is_kernel;
 
 struct LabelList;
 
-struct ProgramDescriptor* assemble(int num_files, int* file_names, bool is_kernel,
-  const char *const *const argv, char** files, struct LabelList** labels_out,
-  struct DebugInfoList** labels_c_out);
+// Assemble the preprocessed buffers `files` (named `paths` in diagnostics)
+// into one program. Returns NULL after reporting the first error. When
+// labels_out / debug_out are non-NULL they receive the -g label and debug
+// tables, owned by the caller.
+struct ProgramDescriptor* assemble(int num_files, const char* const* paths, char** files,
+  bool is_kernel, struct LabelList** labels_out, struct DebugInfoList** debug_out);
 
-void set_cli_defines(int count, const char* const* defines);
-
-// Classify whether operand parsing found a value, found nothing, or failed.
-enum ConsumeResult {
-  ERROR,
-  NOT_FOUND,
-  FOUND
-};
+// Validate and record -DNAME=value definitions applied to every file.
+// Returns false after reporting the first malformed or duplicate definition.
+// The strings are borrowed and must outlive assemble().
+bool set_cli_defines(int count, const char* const* defines);
 
 // Identify output sections and the implicit kernel section.
 // NO_SECTION marks user-mode code before any .text/.rodata/.data/.bss
@@ -43,45 +40,41 @@ enum UserSection {
   SECTION_COUNT = 6,
 };
 
-// print line causing an error
-void print_error(void);
+// Which names an operand may refer to and how labels are valued.
+// Unless OPERAND_LABELS_FIRST is set, .define names shadow labels.
+enum OperandFlags {
+  OPERAND_DEFINES = 1,        // .define / -D constants of the current file
+  OPERAND_LABELS = 2,         // labels of this file, then .global labels
+  OPERAND_PC_RELATIVE = 4,    // labels resolve to label - (pc + 4)
+  OPERAND_DEFER_LABELS = 8,   // in pass 1, any unresolved name is accepted as 0
+  OPERAND_LABELS_FIRST = 16,  // look up labels before .define names
+};
 
-// is the rest of the file just whitespace?
-bool is_at_end(void);
+// Operand rules for instruction immediates and for .fill data words.
+// Instruction immediates check labels before .define names, while every
+// directive checks .define names first; see the note in consume_immediate.
+enum {
+  OPERAND_INSTRUCTION = OPERAND_DEFINES | OPERAND_LABELS | OPERAND_PC_RELATIVE |
+                        OPERAND_DEFER_LABELS | OPERAND_LABELS_FIRST,
+  OPERAND_DATA = OPERAND_DEFINES | OPERAND_LABELS | OPERAND_DEFER_LABELS,
+};
 
-// skip whitespace and commas until end of line or non-whitespace character
-void skip(void);
+// What a parsed operand turned out to be.
+enum OperandKind {
+  OPERAND_LITERAL,    // integer literal (also reported for a malformed literal)
+  OPERAND_DEFINE,     // .define / -D constant
+  OPERAND_LABEL,      // resolved label
+  OPERAND_DEFERRED,   // name accepted as 0 in pass 1
+  OPERAND_UNDEFINED,  // name that could not be resolved (result is ERROR)
+};
 
-// skip until we get to a new nonempty line
-void skip_newline(void);
+// Parse an integer literal or a name and resolve it according to `flags`.
+// `context` names the directive in undefined-name errors (NULL: instruction).
+long consume_operand(unsigned flags, const char* context, enum ConsumeResult* result,
+                     enum OperandKind* kind_out);
 
-// skip an entire line
-void skip_line(void);
-
-// attempt to consume a string, has no effect if a match is not found
-bool consume(const char* str);
-
-// attempt to consume a keyword, has no effect if a match is not found
-// differs from consume because we ensure that there is a whitespace character at the end
-bool consume_keyword(const char* str);
-
-// attempt to consume an identifier, has no effect if a match is not found
-struct Slice* consume_identifier(void);
-
-struct Slice* consume_label(void);
-
-// attempt to consume a register
-int consume_register(void);
-
-int consume_control_register(void);
-
-// attempt to consume an integer literal
-long consume_literal(enum ConsumeResult* result);
-
-// consume a literal immediate or label immediate
-long consume_immediate(enum ConsumeResult* result);
-
-// consumes a single instruction and converts it to binary or hex
-int consume_instruction(enum ConsumeResult* result);
+// consume a literal immediate or label immediate (OPERAND_INSTRUCTION rules).
+// kind may be NULL.
+long consume_immediate(enum ConsumeResult* result, enum OperandKind* kind);
 
 #endif  // ASSEMBLER_H
