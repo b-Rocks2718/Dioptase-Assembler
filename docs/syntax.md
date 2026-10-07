@@ -26,7 +26,7 @@ Valid registers: `r0` - `r31`
 
 Valid control registers:
 
-`cr0` - `cr12`  
+`cr0` - `cr9` and `cr12` (`cr10` and `cr11` are reserved and rejected)  
 `psr` (processor status register) is an alias for `cr0`  
 `pid` (process ID) is an alias for `cr1`  
 `isr` (interrupt status register) is an alias for `cr2`  
@@ -37,8 +37,6 @@ Valid control registers:
 `tlba` (tlb fault address) is an alias for `cr7`
 `ksp` (kernel stack pointer) is an alias for `cr8`  
 `cid` (core ID) is an alias for `cr9`  
-`mbi` (mailbox in) is an alias for `cr10`  
-`mbo` (mailbox out) is an alias for `cr11`  
 `tlbf` (TLB fault flags) is an alias for `cr12`  
 
 You can pass any nonzero number of .s files into the assembler and it will produce a single `.hex` file.
@@ -154,6 +152,12 @@ label and stores the return address in `r29`.
 `cmp rA, rB` - Alias for `sub r0, rA, rB`
 
 `cmp rA, i` - Alias for `sub r0, rA, i`
+
+Note the operand order: immediate `sub` computes `i - rB` (ISA.md), so
+`cmp rA, i` sets flags for `i - rA`, the reverse of `cmp rA, rB` (which sets
+flags for `rA - rB`). Ordered branches after `cmp rA, i` compare `i` against
+`rA`: `cmp r1, 4` followed by `bbe` branches when `4 <= r1`, not when
+`r1 <= 4`. `bz`/`bnz` are unaffected.
 
 ## Directives
 

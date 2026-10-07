@@ -95,7 +95,7 @@ static int expect_mov_register(bool* is_control){
     *is_control = true;
     return reg;
   }
-  macro_error("Invalid register\nValid registers are r0 - r31\n");
+  macro_error("Invalid register\nValid registers are r0 - r31 and control registers cr0 - cr9, cr12 (cr10 and cr11 are reserved)\n");
   return -1;
 }
 

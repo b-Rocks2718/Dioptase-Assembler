@@ -17,6 +17,4 @@ _start:
   mov r0, tlba
   mov r0, ksp
   mov r0, cid
-  mov r0, mbi
-  mov r0, mbo
   mov r0, tlbf

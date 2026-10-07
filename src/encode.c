@@ -555,7 +555,7 @@ static int consume_crmv(bool* success){
     ra = consume_control_register();
     if (ra == -1){
       print_error();
-      fprintf(stderr, "Invalid register or control register\n");
+      fprintf(stderr, "Invalid register or control register\nValid registers are r0 - r31 and cr0 - cr9, cr12 (cr10 and cr11 are reserved)\n");
       *success = false;
       return 0;
     }
@@ -566,7 +566,7 @@ static int consume_crmv(bool* success){
       form = CRMV_CR_FROM_REG;
       if (rb == -1){
         print_error();
-        fprintf(stderr, "Invalid control register\n");
+        fprintf(stderr, "Invalid control register\nValid control registers are cr0 - cr9, cr12 (cr10 and cr11 are reserved)\n");
         *success = false;
         return 0;
       }
@@ -579,7 +579,7 @@ static int consume_crmv(bool* success){
       form = CRMV_REG_FROM_REG;
       if (rb == -1){
         print_error();
-        fprintf(stderr, "Invalid register or control register\n");
+        fprintf(stderr, "Invalid register or control register\nValid registers are r0 - r31 and cr0 - cr9, cr12 (cr10 and cr11 are reserved)\n");
         *success = false;
         return 0;
       }
@@ -633,15 +633,20 @@ static int consume_mode_op(bool* success){
   return priv_base(PRIV_MODE, mode);
 }
 
-// Parse "ipi rA, n|all": interrupt core n (or every core); rA gets the result.
+// Parse "ipi n|all": interrupt core n (or every core). ipi always succeeds
+// and writes no register, so the rA field is left zero.
 static int consume_ipi(bool* success){
   if (!check_privileges(success)) return 0;
 
-  int ra = expect_register(success);
-  if (ra == -1) return 0;
-  int instruction = priv_base(PRIV_IPI, 0) | (ra << RA_SHIFT);
+  int instruction = priv_base(PRIV_IPI, 0);
 
   skip();
+  if (consume_register() != -1){
+    print_error();
+    fprintf(stderr, "ipi takes no result register; expected 'ipi n' or 'ipi all', found 'ipi rA, ...'\n");
+    *success = false;
+    return 0;
+  }
   if (consume_keyword("all")) return instruction | (1 << PRIV_ALL_BIT);
 
   enum ConsumeResult result;
