@@ -414,7 +414,37 @@ static long resolve_operand_name(const struct Slice* name, unsigned flags, const
   return 0;
 }
 
-// Parse an integer literal or a name and resolve it per `flags`.
+// Parse an optional `+ literal` or `- literal` after a name, on the same line
+// with only spaces or tabs between (so a separator such as ',' or ';' never
+// joins two operands). Returns the signed offset, or 0 with the cursor
+// unchanged when no '+' or '-' follows. A sign without a literal is an error.
+static long consume_name_offset(const struct Slice* name, enum ConsumeResult* result) {
+  const char* start = current;
+  while (*current == ' ' || *current == '\t') current++;
+  bool negate = *current == '-';
+  if (!negate && *current != '+') {
+    current = start;
+    return 0;
+  }
+  current++;
+  enum ConsumeResult literal_result;
+  long offset = consume_literal(&literal_result);
+  if (literal_result != FOUND) {
+    if (literal_result == NOT_FOUND) {
+      print_error();
+      fprintf(stderr, "Expected integer literal after '%c' in offset for \"", negate ? '-' : '+');
+      print_slice_err(name);
+      fprintf(stderr, "\"\n");
+    }
+    *result = ERROR;
+    return 0;
+  }
+  return negate ? -offset : offset;
+}
+
+// Parse an integer literal, or a name with an optional `+ imm` / `- imm`
+// offset, and resolve it per `flags`. The offset is added to the name's
+// value, so a PC-relative label operand encodes (label + imm) - (pc + 4).
 // NOT_FOUND (cursor unchanged) when neither is present. kind_out may be NULL.
 long consume_operand(unsigned flags, const char* context, enum ConsumeResult* result,
                      enum OperandKind* kind_out) {
@@ -423,6 +453,9 @@ long consume_operand(unsigned flags, const char* context, enum ConsumeResult* re
   struct Slice name;
   if (*result == NOT_FOUND && consume_identifier(&name)) {
     value = resolve_operand_name(&name, flags, context, result, &kind);
+    if (*result == FOUND) {
+      value += consume_name_offset(&name, result);
+    }
   }
   if (kind_out != NULL) *kind_out = kind;
   return value;
